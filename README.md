@@ -1,12 +1,18 @@
-# What Are We Eating Next 🍲
+# mealfactor 🍲
 
 A tiny web app for two people sharing a kitchen:
 
 - **🗳️ Vote**: suggest meals (🏠 home or 🍽️ out), both vote 👍/👎, then pick the winner. Votes show up live on both phones.
-  "It's been a while" lists regulars you haven't had in 2+ weeks, one tap to add them to the vote.
-- **📅 Calendar**: a month view of what you ate. Picking a vote winner logs it automatically, or add meals to any day by hand.
+  A **Today** card shows what you've eaten so far, with macro totals.
+- **💭 It's been a while**: suggestions from your regulars, one tap to add to the vote or log as eaten.
+  - Each meal is judged by its own rhythm (median gap between eats), falling back to 14 days until it has history.
+  - Meals that use groceries you've already bought (ticked) come first, matched by name or the meal's ingredients.
+  - 💤 *Not now* hides a meal for a week (with Undo); filter by Home / Out; 🎲 *Surprise me* picks from the top three.
+  - Meals usually eaten at another time of day sink down the list.
+- **📅 Calendar**: a month view of what you ate. Picking a vote winner logs it automatically, or add meals to any day by hand from a dropdown of your regulars (or a new one).
 - **⭐ Regulars**: two lists, things you make at home and things you eat out (with the place), each showing when you last had it.
-- **🧺 Groceries**: log what you have this week, and tap ✕ when something's used up.
+  ✎ edit sets the name, place, ingredients, and macros (carbs, protein, fat in grams per serving; calories are worked out at 4/4/9 kcal per gram).
+- **🧺 Groceries**: add what you need, tick items off as you buy them (with Undo), and clear the ticked ones.
 
 Username and password login. It's a static site on GitHub Pages, at https://mealfactor.github.io, with data stored in [Supabase](https://supabase.com) (free tier).
 
@@ -21,7 +27,7 @@ that belong to their own household. The Supabase *publishable key* in `config.js
 
 1. Create a free project at [supabase.com](https://supabase.com).
 2. **SQL Editor → New query**, paste all of `supabase/schema.sql`, then click **Run**.
-   (Existing databases: run the files in `supabase/migrations/` you haven't yet; the latest is `004_grocery_checked.sql`.)
+   (Existing databases: run the files in `supabase/migrations/` you haven't yet; the latest is `006_suggestions.sql`.)
 3. **Authentication → Sign In / Providers → Email**: turn **off** “Confirm email”. Usernames are mapped
    to pseudo-emails, so no mail can be delivered.
 4. **Project Settings → API**: copy the **Project URL** (Settings → Data API) and the **publishable** key (Settings → API Keys) into `config.js`, then commit and push.
@@ -35,7 +41,7 @@ that belong to their own household. The Supabase *publishable key* in `config.js
 ```sh
 npm install        # once; only installs playwright-core (uses your installed Chrome)
 npm test           # unit + UI tests
-npm run test:unit  # just the logic in lib.js (dates, staleness, scoring, calendar)
+npm run test:unit  # just the logic in lib.js (dates, suggestions, scoring, calendar, macros)
 npm run test:ui    # clicks through the real page in headless Chrome at phone sizes
 ```
 
