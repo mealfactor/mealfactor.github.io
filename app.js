@@ -2,8 +2,8 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 import { SUPABASE_URL, SUPABASE_KEY, USERNAME_EMAIL_DOMAIN } from "./config.js";
 import {
   STALE_DAYS, esc, kindIcon, ymd, parseYmd, firstOfMonth, addMonths, daysAgo, agoText, slotForHour,
-  activeDishes as active, findDish as find, staleDishes, regularsList,
-  scoreOptions, leader, voteAction, monthCells, groupByDay, sortBySlot,
+  activeDishes as active, findDish as find, suggestions, STALE_LIMIT, regularsList,
+  scoreOptions, leader, voteAction, monthCells, groupByDay, sortBySlot, MACROS, macroText, sumMacros, parseGrams,
 } from "./lib.js";
 
 const app = document.getElementById("app");
@@ -36,7 +36,7 @@ const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 const toEmail = (u) => `${u.trim().toLowerCase()}@${USERNAME_EMAIL_DOMAIN}`;
 
 let state = {
-  user: null, member: null, household: null, members: [], options: [], votes: [], groceries: [],
+  staleKind: "", staleAll: false, user: null, member: null, household: null, members: [], options: [], votes: [], groceries: [],
   dishes: [], eaten: [], calMonth: firstOfMonth(new Date()), calDay: ymd(new Date()),
 };
 let channel = null;
@@ -221,6 +221,24 @@ function showMain() {
     });
   });
 
+  const dlg = $("#dish-dialog"), df = $("#dish-form");
+  $("#dish-cancel").addEventListener("click", () => dlg.close());
+  df.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const dish = state.dishes.find((d) => d.id === df.dataset.id);
+    const err = $(".error", df);
+    if (!dish) return dlg.close();
+    const name = df.name.value.trim();
+    if (!name) return showError(err, new Error("Give it a name."));
+    let grams;
+    try { grams = Object.fromEntries(MACROS.map(([k]) => [k, parseGrams(df[k].value)])); } catch (x) { return showError(err, x); }
+    const place = dish.kind === "out" ? (df.place.value.trim() || null) : null;
+    const { error } = await sb.from("dishes").update({ name, place, ingredients: df.ingredients.value.trim() || null, ...grams }).eq("id", dish.id);
+    if (error) return showError(err, error.code === DUPLICATE ? new Error(`"${name}" is already a regular.`) : error);
+    dlg.close();
+    loadDishes(); loadEaten(); loadMeals();
+  });
+
   loadHousehold();
   loadMeals();
   loadGroceries();
@@ -294,8 +312,9 @@ async function onListClick(e) {
     const g = state.groceries.find((x) => x.id === id);
     if (!g) return;
     g.checked = !g.checked; // instant feedback; the reload below confirms it
+    g.checked_at = g.checked ? new Date().toISOString() : null;
     renderGroceries();
-    const { error } = await sb.from("groceries").update({ checked: g.checked }).eq("id", id);
+    const { error } = await sb.from("groceries").update({ checked: g.checked, checked_at: g.checked_at }).eq("id", id);
     if (error) say(error.message);
     loadGroceries();
   } else if (act === "clear-ticked") {
@@ -304,9 +323,31 @@ async function onListClick(e) {
     await sb.from("groceries").delete().in("id", rows.map((g) => g.id));
     loadGroceries();
     toast(`Cleared ${rows.length} ticked item${rows.length > 1 ? "s" : ""}.`, async () => {
-      const { error } = await sb.from("groceries").insert(rows.map(({ id, name, qty, checked, created_at }) => ({ id, name, qty, checked, created_at })));
+      const { error } = await sb.from("groceries").insert(rows.map(({ id, name, qty, checked, checked_at, created_at }) => ({ id, name, qty, checked, checked_at, created_at })));
       if (error) say(error.message);
       loadGroceries();
+    });
+  } else if (act === "stale-filter") {
+    state.staleKind = btn.dataset.kind;
+    state.staleAll = false;
+    renderStale();
+  } else if (act === "stale-more") {
+    state.staleAll = !state.staleAll;
+    renderStale();
+  } else if (act === "surprise") {
+    const pool = staleRows().filter((r) => !state.options.some((o) => o.dish_id === r.d.id)).slice(0, 3);
+    if (!pool.length) return say("Nothing to pick from.");
+    const pick = pool[Math.floor(Math.random() * pool.length)].d;
+    await suggestDish(pick);
+    toast(`Added ${pick.name} to the vote.`);
+  } else if (act === "snooze") {
+    const until = ymd(new Date(Date.now() + 7 * 864e5));
+    await sb.from("dishes").update({ snoozed_until: until }).eq("id", id);
+    loadDishes();
+    toast(`Hiding ${dish?.name ?? "it"} for a week.`, async () => {
+      const { error } = await sb.from("dishes").update({ snoozed_until: null }).eq("id", id);
+      if (error) say(error.message);
+      loadDishes();
     });
   } else if (act === "dish-vote" && dish) {
     await suggestDish(dish);
@@ -314,12 +355,15 @@ async function onListClick(e) {
   } else if (act === "dish-ate" && dish) {
     await logEaten(dish);
   } else if (act === "edit-dish" && dish) {
-    const name = prompt("Rename (updates the calendar and vote too):", dish.name)?.trim();
-    if (!name) return;
-    const place = dish.kind === "out" ? (prompt("Where?", dish.place ?? "")?.trim() || null) : null;
-    const { error } = await sb.from("dishes").update({ name, place }).eq("id", id);
-    if (error) return say(error.code === DUPLICATE ? `"${name}" is already a regular.` : error.message);
-    loadDishes(); loadEaten(); loadMeals();
+    const f = $("#dish-form");
+    f.dataset.id = dish.id;
+    f.name.value = dish.name;
+    f.place.value = dish.place ?? "";
+    f.place.parentElement.hidden = dish.kind !== "out";
+    for (const [k] of MACROS) f[k].value = dish[k] ?? "";
+    f.ingredients.value = dish.ingredients ?? "";
+    $(".error", f).hidden = true;
+    $("#dish-dialog").showModal();
   } else if (act === "del-dish" && dish) {
     await sb.from("dishes").update({ archived: true }).eq("id", id);
     loadDishes();
@@ -365,6 +409,12 @@ async function loadHousehold() {
   renderMeals();
 }
 
+const macroLine = (dishId) => macroText(state.dishes.find((d) => d.id === dishId));
+const totalsLine = (entries) => {
+  const t = sumMacros(entries, state.dishes);
+  return t ? macroText(t) : "";
+};
+
 const nameOf = (uid) => state.members.find((m) => m.user_id === uid)?.username ?? "someone";
 
 // ---------------------------------------------------------------- vote ----
@@ -388,6 +438,7 @@ function renderMeals() {
     <li>
       <div class="grow">
         <div>${kindIcon(o.kind)} ${esc(o.name)}</div>
+        ${macroLine(o.dish_id) ? `<div class="meta">${macroLine(o.dish_id)}</div>` : ""}
         <div class="voters">${o.vs.map((v) => `${v.value > 0 ? "👍" : "👎"} ${esc(nameOf(v.user_id))}`).join(" · ") || `suggested by ${esc(nameOf(o.created_by))}`}</div>
       </div>
       <div class="vote">
@@ -405,18 +456,38 @@ function renderMeals() {
     : "";
 }
 
+const staleRows = () => suggestions(state.dishes, state.eaten, state.groceries, ymd(new Date()),
+  { kind: state.staleKind || null, slot: slotForNow() });
+
+function staleReason({ last, typical, overdue, uses }) {
+  const parts = [];
+  if (uses.length) parts.push(`🛒 uses your ${uses.map((u) => u.name).slice(0, 2).join(", ")}${uses[0].age >= 3 ? ` (bought ${uses[0].age}d ago)` : ""}`);
+  if (!last) parts.push("not had yet");
+  else parts.push(overdue > 0 ? `${agoText(last)} · overdue by ${overdue} day${overdue > 1 ? "s" : ""}` : agoText(last));
+  return parts.join(" · ");
+}
+
 function renderStale() {
   if (!$("#stale")) return;
-  const rows = staleDishes(state.dishes, state.eaten);
+  const all = staleRows();
   $("#stale-card").hidden = !activeDishes().length;
-  $("#stale").innerHTML = rows.length ? rows.map(({ d, last }) => {
+  for (const b of document.querySelectorAll("#stale-filter button")) b.setAttribute("aria-pressed", String(b.dataset.kind === state.staleKind));
+  const rows = state.staleAll ? all : all.slice(0, STALE_LIMIT);
+  $("#stale").innerHTML = rows.length ? rows.map((r) => {
+    const { d } = r;
     const inVote = state.options.some((o) => o.dish_id === d.id);
     return `<li>
       <div class="grow">${kindIcon(d.kind)} ${esc(d.name)}${d.place ? ` <span class="meta">· ${esc(d.place)}</span>` : ""}
-        <div class="meta">${agoText(last)}</div></div>
+        <div class="meta">${esc(staleReason(r))}</div></div>
+      <button data-act="dish-ate" data-id="${d.id}" title="We're eating this today">Eating this</button>
       <button data-act="dish-vote" data-id="${d.id}" ${inVote ? "disabled" : ""}>${inVote ? "✓ In vote" : "+ Vote"}</button>
+      <button class="x" data-act="snooze" data-id="${d.id}" aria-label="Not now" title="Not now (hide for a week)">💤</button>
     </li>`;
   }).join("") : `<li class="muted">You've had all your regulars recently 🎉</li>`;
+  $("#surprise").hidden = !all.length;
+  const more = $("#stale-more");
+  more.hidden = all.length <= STALE_LIMIT;
+  more.textContent = state.staleAll ? "Show fewer" : `Show ${all.length - STALE_LIMIT} more`;
 }
 
 // ------------------------------------------------------------ regulars ----
@@ -453,7 +524,8 @@ function renderDishes() {
     ul.innerHTML = rows.length ? rows.map(({ d, last }) => `
       <li>
         <div class="grow">${esc(d.name)}${d.place ? ` <span class="meta">· ${esc(d.place)}</span>` : ""}
-          <div class="meta ${last && daysAgo(last) >= STALE_DAYS ? "stale" : ""}">${last ? `last had ${agoText(last)}` : "not had yet"}</div></div>
+          <div class="meta ${last && daysAgo(last) >= STALE_DAYS ? "stale" : ""}">${last ? `last had ${agoText(last)}` : "not had yet"}</div>
+          ${macroText(d) ? `<div class="meta macros">${macroText(d)}</div>` : ""}</div>
         <button data-act="edit-dish" data-id="${d.id}" aria-label="Rename" title="Rename">✎</button>
         <button data-act="dish-vote" data-id="${d.id}" aria-label="Add to vote" title="Add to vote">🗳️</button>
         <button data-act="dish-ate" data-id="${d.id}" aria-label="We ate this today" title="We ate this today">✓</button>
@@ -477,9 +549,10 @@ function renderToday() {
   const meals = sortBySlot(groupByDay(state.eaten)[ymd(new Date())] ?? []);
   $("#today").innerHTML = meals.length ? meals.map((x) => {
     const place = x.place ?? state.dishes.find((d) => d.id === x.dish_id)?.place;
-    return `<li><div class="grow">${kindIcon(x.kind)} ${esc(x.name)}${place ? ` <span class="meta">· ${esc(place)}</span>` : ""}</div>
+    return `<li><div class="grow">${kindIcon(x.kind)} ${esc(x.name)}${place ? ` <span class="meta">· ${esc(place)}</span>` : ""}
+      ${macroLine(x.dish_id) ? `<div class="meta macros">${macroLine(x.dish_id)}</div>` : ""}</div>
       <span class="meta">${x.slot ? x.slot[0].toUpperCase() + x.slot.slice(1) : ""}</span></li>`;
-  }).join("") : `<li class="muted">Nothing logged yet today.</li>`;
+  }).join("") + (totalsLine(meals) ? `<li class="total"><div class="grow meta">Total · ${totalsLine(meals)}</div></li>` : "") : `<li class="muted">Nothing logged yet today.</li>`;
 }
 
 function renderCalendar() {
@@ -506,10 +579,10 @@ function renderCalendar() {
     return `
     <li>
       <div class="grow">${kindIcon(x.kind)} ${esc(x.name)}${place ? ` <span class="meta">· ${esc(place)}</span>` : ""}
-        <div class="meta">${x.slot ? x.slot[0].toUpperCase() + x.slot.slice(1) : ""}</div></div>
+        <div class="meta">${x.slot ? x.slot[0].toUpperCase() + x.slot.slice(1) : ""}${macroLine(x.dish_id) ? ` · ${macroLine(x.dish_id)}` : ""}</div></div>
       <button class="x" data-act="del-eaten" data-id="${x.id}" aria-label="Remove">✕</button>
     </li>`;
-  }).join("") : `<li class="muted">Nothing logged.</li>`;
+  }).join("") + (totalsLine(meals) ? `<li class="total"><div class="grow meta">Day total · ${totalsLine(meals)}</div></li>` : "") : `<li class="muted">Nothing logged.</li>`;
 }
 
 // ----------------------------------------------------------- groceries ----
@@ -518,6 +591,7 @@ async function loadGroceries() {
   const { data } = await sb.from("groceries").select("*").order("created_at", { ascending: false });
   state.groceries = data ?? [];
   renderGroceries();
+  renderStale();
 }
 
 function renderGroceries() {

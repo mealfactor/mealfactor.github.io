@@ -187,3 +187,18 @@ button.link#clear-ticked { min-height: 44px; padding: 10px 8px; }
 .grow-select { flex: 1; min-width: 0; }
 .row:has(> [hidden]:only-child) { display: none; }
 #eaten-form .row + .row { margin-top: 8px; }
+
+/* Edit-meal dialog + macros */
+dialog { border: 1px solid var(--border); border-radius: 14px; background: var(--card); color: var(--text); padding: 16px; width: min(92vw, 420px); }
+dialog::backdrop { background: #0006; }
+dialog h2 { margin-top: 0; }
+.macro-inputs { align-items: flex-start; }
+.macro-inputs label { flex: 1; min-width: 0; margin: 0; }
+.list .macros { color: var(--text); opacity: .75; }
+.list li.total { border-top: 2px solid var(--border); }
+
+/* It's been a while: filter + surprise row */
+#stale-tools { justify-content: space-between; gap: .5rem; margin: .25rem 0 .5rem; }
+.seg { display: inline-flex; border: 1px solid var(--line, #ddd); border-radius: 999px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; background: transparent; padding: .35rem .7rem; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }

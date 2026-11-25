@@ -64,6 +64,7 @@ create table if not exists public.groceries (
   qty          text,
   added_by     uuid default auth.uid() references auth.users(id) on delete set null,
   checked      boolean not null default false,
+  checked_at   timestamptz,
   created_at   timestamptz not null default now()
 );
 
@@ -192,6 +193,11 @@ exception when duplicate_object then null; end $$;
 -- One regular everywhere (also in migrations/003_one_dish_everywhere.sql) -----
 
 alter table public.dishes add column if not exists archived boolean not null default false;
+alter table public.dishes add column if not exists carbs_g   numeric check (carbs_g   >= 0);
+alter table public.dishes add column if not exists protein_g numeric check (protein_g >= 0);
+alter table public.dishes add column if not exists fat_g     numeric check (fat_g     >= 0);
+alter table public.dishes    add column if not exists snoozed_until date;
+alter table public.dishes    add column if not exists ingredients   text;
 
 -- Find-or-create a regular by name (case/whitespace-insensitive). Un-archives it if needed.
 create or replace function public.ensure_dish(p_name text, p_kind text default 'home', p_place text default null)

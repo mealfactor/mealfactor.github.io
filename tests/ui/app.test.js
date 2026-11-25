@@ -247,21 +247,97 @@ describe("today card", () => {
   }));
 });
 
+// Slots depend on the clock (meal-time awareness), so these seeds log meals without one.
+const slotless = () => {
+  const seed = baseSeed();
+  seed.meals_eaten = seed.meals_eaten.map((m) => ({ ...m, slot: null }));
+  return seed;
+};
+const dishRow = (id, name, extra = {}) => ({ id, household_id: "h1", name, kind: "home", ...extra });
+const eatenRow = (id, dish_id, name, n, extra = {}) => ({ id, household_id: "h1", dish_id, name, kind: "home", eaten_on: day(n), slot: null, ...extra });
+
 describe("it's been a while", () => {
-  test("shows regulars 14+ days old (oldest first), then never-had; hides recent and archived", () => withApp(baseSeed(), async ({ page }) => {
+  test("shows overdue regulars (most overdue first), then never-had; hides recent and archived", () => withApp(slotless(), async ({ page }) => {
     await page.waitForSelector("#stale li");
     assert.deepEqual(await texts(page, "#stale li .grow"), [
-      "🍽️ Pad thai · Thai Basil 6 weeks ago",
-      "🏠 Paneer butter masala 4 weeks ago",
+      "🍽️ Pad thai · Thai Basil 6 weeks ago · overdue by 26 days",
+      "🏠 Paneer butter masala 4 weeks ago · overdue by 11 days",
       "🏠 Aloo paratha not had yet",
     ]);
   }));
 
-  test("+ Vote adds it once and flips to '✓ In vote'", () => withApp(baseSeed(), async ({ page, db }) => {
+  test("+ Vote adds it once and flips to '✓ In vote'", () => withApp(slotless(), async ({ page, db }) => {
     await page.click("#stale li:first-child [data-act=dish-vote]");
-    await page.waitForSelector("#stale li:first-child button:disabled");
-    assert.equal(await page.textContent("#stale li:first-child button"), "✓ In vote");
+    await page.waitForSelector("#stale li:first-child [data-act=dish-vote]:disabled");
+    assert.equal(await page.textContent("#stale li:first-child [data-act=dish-vote]"), "✓ In vote");
     assert.equal((await db()).meal_options.length, 1);
+  }));
+
+  test("Eating this logs it for today and drops it from the list", () => withApp(slotless(), async ({ page, db }) => {
+    await page.click("#stale li:first-child [data-act=dish-ate]"); // Pad thai
+    await page.waitForFunction(() => !document.querySelector("#stale").innerText.includes("Pad thai"));
+    assert.ok((await db()).meals_eaten.some((m) => m.name === "Pad thai" && m.eaten_on === TODAY));
+  }));
+
+  test("Not now hides it for a week; Undo brings it back", () => withApp(slotless(), async ({ page, db }) => {
+    await page.click("#stale li:first-child [data-act=snooze]");
+    await page.waitForFunction(() => !document.querySelector("#stale").innerText.includes("Pad thai"));
+    assert.match(await toastText(page), /Hiding Pad thai for a week/);
+    assert.ok((await db()).dishes.find((d) => d.name === "Pad thai").snoozed_until > TODAY);
+    await page.click("#toast button");
+    await page.waitForFunction(() => document.querySelector("#stale").innerText.includes("Pad thai"));
+    assert.equal((await db()).dishes.find((d) => d.name === "Pad thai").snoozed_until, null);
+  }));
+
+  test("Home / Out filter", () => withApp(slotless(), async ({ page }) => {
+    await page.click("[data-act=stale-filter][data-kind=out]");
+    assert.deepEqual(await texts(page, "#stale li .grow"), ["🍽️ Pad thai · Thai Basil 6 weeks ago · overdue by 26 days"]);
+    await page.click("[data-act=stale-filter][data-kind=home]");
+    assert.equal((await texts(page, "#stale li .grow")).length, 2);
+    await page.click("[data-act=stale-filter][data-kind='']");
+    assert.equal((await texts(page, "#stale li .grow")).length, 3);
+  }));
+
+  test("shows 6, then Show more / Show fewer", () => withApp({
+    ...slotless(),
+    dishes: Array.from({ length: 9 }, (_, i) => dishRow(`n${i}`, `Dish ${i}`)),
+    meals_eaten: [],
+  }, async ({ page }) => {
+    await page.waitForSelector("#stale li");
+    assert.equal((await texts(page, "#stale li .grow")).length, 6);
+    assert.equal((await page.textContent("#stale-more")).trim(), "Show 3 more");
+    await page.click("#stale-more");
+    assert.equal((await texts(page, "#stale li .grow")).length, 9);
+    await page.click("#stale-more");
+    assert.equal((await texts(page, "#stale li .grow")).length, 6);
+  }));
+
+  test("Surprise me adds one of the top three to the vote", () => withApp(slotless(), async ({ page, db }) => {
+    await page.click("#surprise");
+    await page.waitForFunction(() => document.querySelector("#options li .grow"));
+    assert.equal((await db()).meal_options.length, 1);
+    assert.match(await toastText(page), /to the vote/);
+  }));
+
+  test("groceries you've bought bring a meal to the top, with the reason", () => withApp({
+    ...slotless(),
+    dishes: [dishRow("d1", "Palak paneer", { ingredients: "spinach, paneer" }), dishRow("d2", "Old thing")],
+    meals_eaten: [eatenRow("e1", "d1", "Palak paneer", 2), eatenRow("e2", "d2", "Old thing", 30)],
+    groceries: [{ id: "g1", household_id: "h1", name: "Spinach", checked: true, checked_at: `${day(5)}T10:00:00Z`, created_at: `${day(6)}T10:00:00Z` }],
+  }, async ({ page }) => {
+    await page.waitForSelector("#stale li");
+    const rows = await texts(page, "#stale li .grow");
+    assert.match(rows[0], /Palak paneer.*uses your Spinach \(bought \d+d ago\)/);
+    assert.match(rows[1], /Old thing/);
+  }));
+
+  test("ingredients are editable in the meal dialog and saved", () => withApp(slotless(), async ({ page, db }) => {
+    await tab(page, "regulars");
+    await page.click("#dishes-home [data-act=edit-dish]");
+    await page.fill("#dish-form [name=ingredients]", "paneer, spinach");
+    await page.click("#dish-form button[type=submit]");
+    await page.waitForFunction(() => !document.querySelector("#dish-dialog").open);
+    assert.ok((await db()).dishes.some((d) => d.ingredients === "paneer, spinach"));
   }));
 
   test("hidden when there are no regulars; celebrates when all are recent", async () => {
@@ -438,13 +514,19 @@ describe("regulars", () => {
     assert.equal((await db()).dishes.filter((x) => x.name.toLowerCase() === "rajma chawal").length, 1);
   }));
 
+  const edit = async (page, id, vals) => {
+    await page.click(`#dishes-home [data-act=edit-dish][data-id=${id}]`);
+    await page.waitForSelector("#dish-dialog[open]");
+    for (const [k, v] of Object.entries(vals)) await page.fill(`#dish-form [name=${k}]`, v);
+  };
+
   test("rename updates the calendar and the vote too", () => withApp({
     ...baseSeed(),
     meal_options: [{ id: "o1", household_id: "h1", dish_id: "d1", name: "Rajma chawal", kind: "home", status: "open", created_at: "1" }],
-  }, async ({ page, answer }) => {
+  }, async ({ page }) => {
     await tab(page, "regulars");
-    answer("Rajma rice");
-    await page.click("#dishes-home [data-act=edit-dish][data-id=d1]");
+    await edit(page, "d1", { name: "Rajma rice" });
+    await page.click("#dish-form button[type=submit]");
     await page.waitForFunction(() => document.querySelector("#dishes-home").innerText.includes("Rajma rice"));
     await tab(page, "meal");
     assert.deepEqual(await texts(page, "#options li .grow > div:first-child"), ["🏠 Rajma rice"]);
@@ -453,23 +535,62 @@ describe("regulars", () => {
     assert.match(await page.innerText("#day-meals"), /Rajma rice/);
   }));
 
-  test("renaming to another regular's name is refused", () => withApp(baseSeed(), async ({ page, answer, dialogs, db }) => {
+  test("renaming to another regular's name is refused", () => withApp(baseSeed(), async ({ page, db }) => {
     await tab(page, "regulars");
-    answer("aloo paratha");
-    await page.click("#dishes-home [data-act=edit-dish][data-id=d1]");
-    await settle(page);
-    assert.match(await toastText(page), /already a regular/);
+    await edit(page, "d1", { name: "aloo paratha" });
+    await page.click("#dish-form button[type=submit]");
+    await page.waitForSelector("#dish-form .error:not([hidden])");
+    assert.match(await page.innerText("#dish-form .error"), /already a regular/);
     assert.equal((await db()).dishes.find((x) => x.id === "d1").name, "Rajma chawal");
   }));
 
-  test("cancelling or blanking a rename changes nothing", () => withApp(baseSeed(), async ({ page, answer, db }) => {
+  test("cancelling or blanking the name changes nothing", () => withApp(baseSeed(), async ({ page, db }) => {
     await tab(page, "regulars");
-    answer(false);
-    await page.click("#dishes-home [data-act=edit-dish][data-id=d1]");
-    answer("   ");
-    await page.click("#dishes-home [data-act=edit-dish][data-id=d1]");
+    await edit(page, "d1", { name: "Something else" });
+    await page.click("#dish-cancel");
+    await page.waitForSelector("#dish-dialog:not([open])", { state: "attached" });
+    await edit(page, "d1", { name: "   " });
+    await page.click("#dish-form button[type=submit]");
     await settle(page);
     assert.equal((await db()).dishes.find((x) => x.id === "d1").name, "Rajma chawal");
+  }));
+
+  test("macros: save carbs/protein/fat, see them on regulars, vote, today and the day total", () => withApp({
+    ...baseSeed(),
+    meal_options: [{ id: "o1", household_id: "h1", dish_id: "d1", name: "Rajma chawal", kind: "home", status: "open", created_at: "1" }],
+    meals_eaten: [...baseSeed().meals_eaten, { id: "t1", household_id: "h1", dish_id: "d1", name: "Rajma chawal", kind: "home", eaten_on: TODAY, slot: "lunch", created_at: "1" }],
+  }, async ({ page, db }) => {
+    await tab(page, "regulars");
+    await edit(page, "d1", { carbs_g: "60", protein_g: "14.5", fat_g: "9" });
+    await page.click("#dish-form button[type=submit]");
+    await page.waitForFunction(() => document.querySelector("#dishes-home").innerText.includes("C 60g"));
+    const d = (await db()).dishes.find((x) => x.id === "d1");
+    assert.deepEqual([d.carbs_g, d.protein_g, d.fat_g], [60, 14.5, 9]);
+    assert.match(flat(await page.innerText("#dishes-home")), /Rajma chawal .*C 60g · P 14.5g · F 9g · 379 kcal/);
+    await tab(page, "meal");
+    assert.match(flat(await page.innerText("#options")), /C 60g · P 14.5g · F 9g/);
+    assert.match(flat(await page.innerText("#today")), /Total · C 60g · P 14.5g · F 9g · 379 kcal/);
+    await tab(page, "calendar");
+    assert.match(flat(await page.innerText("#day-meals")), /Day total · C 60g/);
+  }));
+
+  test("macros are optional (blank clears them) and bad input is refused", () => withApp({
+    ...baseSeed(),
+    dishes: baseSeed().dishes.map((x) => (x.id === "d1" ? { ...x, carbs_g: 10, protein_g: 2, fat_g: 1 } : x)),
+  }, async ({ page, db }) => {
+    await tab(page, "regulars");
+    await edit(page, "d1", { carbs_g: "abc" });
+    await page.click("#dish-form button[type=submit]");
+    await page.waitForSelector("#dish-form .error:not([hidden])");
+    assert.match(await page.innerText("#dish-form .error"), /numbers/);
+    assert.equal((await db()).dishes.find((x) => x.id === "d1").carbs_g, 10);
+    await page.fill("#dish-form [name=carbs_g]", "");
+    await page.fill("#dish-form [name=protein_g]", "");
+    await page.fill("#dish-form [name=fat_g]", "");
+    await page.click("#dish-form button[type=submit]");
+    await settle(page);
+    const d = (await db()).dishes.find((x) => x.id === "d1");
+    assert.deepEqual([d.carbs_g, d.protein_g, d.fat_g], [null, null, null]);
   }));
 
   test("remove hides it but keeps calendar history; adding again brings back the same regular", () => withApp(baseSeed(), async ({ page, db, answer }) => {
