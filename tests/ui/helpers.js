@@ -93,6 +93,7 @@ export async function openApp(seed = baseSeed(), { width = 375, height = 812 } =
   await page.clock.install({ time: new Date("2026-10-21T12:00:00-07:00") });
   // Later routes win in Playwright: block everything external, then allow the swap.
   await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, (route) => route.abort());
+  await page.route(/doesitfit\.lol\/measure\.js/, (route) => route.fulfill({ contentType: "text/javascript", body: "" }));
   await page.route(/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js/, async (route) =>
     route.fulfill({ contentType: "text/javascript", body: await readFile(FAKE, "utf8") }));
   await page.addInitScript((s) => { window.__SEED = s; }, seed);
