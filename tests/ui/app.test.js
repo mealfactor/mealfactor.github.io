@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { startAll, stopAll, openApp, baseSeed, texts, tab, settle, email, TODAY, day } from "./helpers.js";
 
 const flat = (s) => s.replace(/\s+/g, " ");
+const toastText = (page) => page.innerText("#toast");
+const pickNew = (page) => page.selectOption("#eaten-form [name=dish]", "__new__");
 
 before(startAll);
 after(stopAll);
@@ -201,19 +203,47 @@ describe("vote", () => {
     assert.match(await page.innerText("#day-meals"), /Pad thai · Thai Basil/);
   }));
 
-  test("'Clear and start a new round' asks first; cancelling keeps everything", () => withApp({
+  test("'Clear and start a new round' clears the vote, and Undo brings it back", () => withApp({
     ...baseSeed(),
     meal_options: [{ id: "o1", household_id: "h1", dish_id: "d3", name: "Aloo paratha", kind: "home", status: "open", created_at: "1" }],
-  }, async ({ page, answer, dialogs, db }) => {
+  }, async ({ page, db, dialogs }) => {
     await page.waitForSelector("#options [data-act=vote]");
-    answer(false);
-    await page.click("#new-round");
-    await settle(page);
-    assert.equal((await db()).meal_options[0].status, "open");
-    answer(true);
     await page.click("#new-round");
     await page.waitForFunction(() => document.querySelector("#options").innerText.includes("No suggestions"));
-    assert.equal(dialogs.length, 2);
+    assert.match(await toastText(page), /Cleared the vote/);
+    await page.click("#toast button");
+    await page.waitForSelector("#options [data-act=vote]");
+    assert.equal((await db()).meal_options[0].status, "open");
+    assert.equal(dialogs.length, 0, "no confirm dialogs");
+  }));
+
+  test("removing a suggestion offers Undo", () => withApp({
+    ...baseSeed(),
+    meal_options: [{ id: "o1", household_id: "h1", dish_id: "d3", name: "Aloo paratha", kind: "home", status: "open", created_at: "1" }],
+  }, async ({ page }) => {
+    await page.click("#options [data-act=del-option]");
+    await page.waitForFunction(() => document.querySelector("#options").innerText.includes("No suggestions"));
+    await page.click("#toast button");
+    await page.waitForSelector("#options [data-act=vote]");
+  }));
+});
+
+describe("today card", () => {
+  test("shows what's been eaten today, in meal order, and links to the calendar", () => withApp({
+    ...baseSeed(),
+    meals_eaten: [
+      ...baseSeed().meals_eaten,
+      { id: "t1", household_id: "h1", dish_id: "d3", name: "Aloo paratha", kind: "home", eaten_on: TODAY, slot: "breakfast", created_at: "1" },
+      { id: "t2", household_id: "h1", dish_id: "d4", name: "Burrito bowl", kind: "out", eaten_on: TODAY, slot: "lunch", created_at: "1" },
+    ],
+  }, async ({ page }) => {
+    assert.deepEqual(await texts(page, "#today li"), ["🏠 Aloo paratha Breakfast", "🍽️ Burrito bowl · Chipotle Lunch"]);
+    await page.click("[data-act=goto]");
+    assert.equal(await page.isVisible("#eaten-form"), true);
+  }));
+
+  test("says so when nothing is logged", () => withApp(baseSeed(), async ({ page }) => {
+    assert.match(await page.innerText("#today"), /Nothing logged yet today/);
   }));
 });
 
@@ -280,6 +310,7 @@ describe("calendar", () => {
     await tab(page, "calendar");
     await page.click(`[data-day="2026-10-15"]`);
     assert.equal(await page.textContent("#day-title"), "Thursday, Oct 15");
+    await pickNew(page);
     await page.fill("#eaten-form [name=name]", "Chole bhature");
     await page.selectOption("#eaten-form [name=kind]", "out");
     assert.equal(await page.isVisible("#eaten-form [name=place]"), true);
@@ -298,9 +329,15 @@ describe("calendar", () => {
     assert.match(flat(await page.innerText("#dishes-out")), /Chole bhature · Haldiram's last had 6 days ago/);
   }));
 
-  test("logging an existing regular with odd spacing/case links to it (no duplicate)", () => withApp(baseSeed(), async ({ page, db }) => {
+  test("the meal picker lists past meals by group; a text box appears only for a new meal", () => withApp(baseSeed(), async ({ page, db }) => {
     await tab(page, "calendar");
-    await page.fill("#eaten-form [name=name]", "  aloo   PARATHA ");
+    assert.equal(await page.isVisible("#eaten-form [name=name]"), false);
+    const opts = await texts(page, "#eaten-form [name=dish] option");
+    assert.deepEqual(opts, ["Aloo paratha", "Paneer butter masala", "Rajma chawal", "Burrito bowl · Chipotle", "Pad thai · Thai Basil", "➕ New meal…"]);
+    await pickNew(page);
+    assert.equal(await page.isVisible("#eaten-form [name=name]"), true);
+    await page.selectOption("#eaten-form [name=dish]", "d3");
+    assert.equal(await page.isVisible("#eaten-form [name=name]"), false);
     await page.selectOption("#eaten-form [name=slot]", "breakfast");
     await page.click("#eaten-form button");
     await page.waitForFunction(() => document.querySelector("#day-meals").innerText.includes("Aloo paratha"));
@@ -309,44 +346,42 @@ describe("calendar", () => {
     assert.equal(d.meals_eaten.at(-1).dish_id, "d3");
   }));
 
+  test("picking an eat-out regular keeps its place and logs on the selected day", () => withApp(baseSeed(), async ({ page, db }) => {
+    await tab(page, "calendar");
+    await page.click(`[data-day="2026-10-15"]`);
+    await page.selectOption("#eaten-form [name=dish]", "d4");
+    await page.selectOption("#eaten-form [name=slot]", "dinner");
+    await page.click("#eaten-form button");
+    await page.waitForFunction(() => document.querySelector("#day-meals").innerText.includes("Burrito bowl · Chipotle"));
+    const e = (await db()).meals_eaten.at(-1);
+    assert.deepEqual([e.dish_id, e.eaten_on, e.kind], ["d4", "2026-10-15", "out"]);
+  }));
+
   test("logging the same meal twice for the same day and slot is refused", () => withApp(baseSeed(), async ({ page, db, dialogs }) => {
     await tab(page, "calendar");
     for (let i = 0; i < 2; i++) {
-      await page.fill("#eaten-form [name=name]", "Rajma chawal");
+      await page.selectOption("#eaten-form [name=dish]", "d1");
       await page.selectOption("#eaten-form [name=slot]", "dinner");
       await page.click("#eaten-form button");
       await settle(page);
     }
     assert.equal((await db()).meals_eaten.filter((m) => m.eaten_on === TODAY && m.dish_id === "d1").length, 1);
-    assert.match(dialogs.at(-1).message, /Already logged for dinner/);
+    assert.match(await toastText(page), /already logged for today's dinner/);
     // A different slot the same day is fine.
-    await page.fill("#eaten-form [name=name]", "Rajma chawal");
+    await page.selectOption("#eaten-form [name=dish]", "d1");
     await page.selectOption("#eaten-form [name=slot]", "lunch");
     await page.click("#eaten-form button");
     await settle(page);
     assert.equal((await db()).meals_eaten.filter((m) => m.eaten_on === TODAY && m.dish_id === "d1").length, 2);
   }));
 
-  test("typing a regular's name picks its 🏠/🍽️, but your own pick wins", () => withApp(baseSeed(), async ({ page, db }) => {
-    await tab(page, "calendar");
-    await page.type("#eaten-form [name=name]", "Burrito bowl");
-    assert.equal(await page.inputValue("#eaten-form [name=kind]"), "out");
-    assert.equal(await page.inputValue("#eaten-form [name=place]"), "Chipotle");
-    await page.fill("#eaten-form [name=name]", "");
-    await page.selectOption("#eaten-form [name=kind]", "home");
-    await page.type("#eaten-form [name=name]", "Burrito bowl");
-    assert.equal(await page.inputValue("#eaten-form [name=kind]"), "home");
-    await page.click("#eaten-form button");
-    await settle(page);
-    assert.equal(await page.inputValue("#eaten-form [name=kind]"), "home");
-    assert.deepEqual((await db()).dishes.filter((x) => x.name === "Burrito bowl").map((x) => x.kind).sort(), ["home", "out"]);
-  }));
-
   test("same name as home vs out are separate regulars", () => withApp(baseSeed(), async ({ page, db }) => {
     await tab(page, "calendar");
+    await pickNew(page);
     await page.fill("#eaten-form [name=name]", "Pizza");
     await page.click("#eaten-form button");
     await settle(page);
+    await pickNew(page);
     await page.fill("#eaten-form [name=name]", "Pizza");
     await page.selectOption("#eaten-form [name=kind]", "out");
     await page.selectOption("#eaten-form [name=slot]", "dinner");
@@ -357,9 +392,8 @@ describe("calendar", () => {
 
   test("meals in a day are ordered breakfast → lunch → snack → dinner; ✕ removes one", () => withApp(baseSeed(), async ({ page, db }) => {
     await tab(page, "calendar");
-    for (const [name, slot] of [["Rajma chawal", "dinner"], ["Aloo paratha", "breakfast"], ["Pad thai", "snack"], ["Burrito bowl", "lunch"]]) {
-      await page.fill("#eaten-form [name=name]", name);
-      await page.dispatchEvent("#eaten-form [name=name]", "change");
+    for (const [dish, slot] of [["d1", "dinner"], ["d3", "breakfast"], ["d5", "snack"], ["d4", "lunch"]]) {
+      await page.selectOption("#eaten-form [name=dish]", dish);
       await page.selectOption("#eaten-form [name=slot]", slot);
       await page.click("#eaten-form button");
       await settle(page);
@@ -370,6 +404,9 @@ describe("calendar", () => {
     await settle(page);
     assert.equal(await page.$$eval("#day-meals li", (x) => x.length), 3);
     assert.ok((await db()).dishes.some((x) => x.name === "Aloo paratha" && !x.archived), "regular survives");
+    await page.click("#toast button");
+    await page.waitForFunction(() => document.querySelectorAll("#day-meals li").length === 4);
+    assert.equal((await db()).meals_eaten.filter((m) => m.dish_id === "d3").length, 1, "undo restores the entry");
   }));
 
   test("the form defaults the slot from the time of day (noon → lunch)", () => withApp(baseSeed(), async ({ page }) => {
@@ -421,7 +458,7 @@ describe("regulars", () => {
     answer("aloo paratha");
     await page.click("#dishes-home [data-act=edit-dish][data-id=d1]");
     await settle(page);
-    assert.match(dialogs.at(-1).message, /already a regular/);
+    assert.match(await toastText(page), /already a regular/);
     assert.equal((await db()).dishes.find((x) => x.id === "d1").name, "Rajma chawal");
   }));
 
@@ -437,7 +474,10 @@ describe("regulars", () => {
 
   test("remove hides it but keeps calendar history; adding again brings back the same regular", () => withApp(baseSeed(), async ({ page, db, answer }) => {
     await tab(page, "regulars");
-    answer(true);
+    await page.click("#dishes-home [data-act=del-dish][data-id=d1]");
+    await page.waitForFunction(() => !document.querySelector("#dishes-home").innerText.includes("Rajma"));
+    await page.click("#toast button"); // Undo
+    await page.waitForFunction(() => document.querySelector("#dishes-home").innerText.includes("Rajma"));
     await page.click("#dishes-home [data-act=del-dish][data-id=d1]");
     await page.waitForFunction(() => !document.querySelector("#dishes-home").innerText.includes("Rajma"));
     await tab(page, "calendar");
@@ -460,7 +500,7 @@ describe("regulars", () => {
     await page.click("#dishes-home [data-act=dish-ate][data-id=d3]");
     await settle(page);
     assert.equal((await db()).meals_eaten.filter((m) => m.dish_id === "d3").length, 1);
-    assert.match(dialogs.at(-1).message, /already logged for today's lunch/);
+    assert.match(await toastText(page), /already logged for today's lunch/);
   }));
 
   test("🗳️ adds to the vote; doing it twice keeps one option", () => withApp(baseSeed(), async ({ page, db }) => {
@@ -497,9 +537,26 @@ describe("groceries", () => {
     await page.click("#grocery-form button");
     await settle(page);
     assert.deepEqual((await texts(page, "#groceries li .grow")).map((t) => t.replace(/ added .*/, "")), ["Rice", "Paneer · 400 g", "Spinach · 1 bunch"]);
-    await page.click("#groceries li:first-child [data-act=del-grocery]");
-    await settle(page);
-    assert.equal((await db()).groceries.length, 2);
+  }));
+
+  test("tick sinks an item to the bottom (and un-ticks); 'Clear ticked' removes with Undo", () => withApp(baseSeed(), async ({ page, db }) => {
+    await tab(page, "groceries");
+    await page.fill("#grocery-form [name=name]", "Rice");
+    await page.click("#grocery-form button");
+    await page.waitForFunction(() => document.querySelectorAll("#groceries li").length === 2);
+    assert.equal(await page.isVisible("#clear-ticked"), false);
+    await page.click("#groceries li:first-child [data-act=tick-grocery]"); // Rice
+    await page.waitForFunction(() => document.querySelector("#groceries li:last-child").innerText.includes("Rice"));
+    assert.deepEqual(await texts(page, "#groceries li.done .grow"), [(await texts(page, "#groceries li.done .grow"))[0]]);
+    assert.equal((await db()).groceries.find((g) => g.name === "Rice").checked, true);
+    await page.click("#clear-ticked");
+    await page.waitForFunction(() => document.querySelectorAll("#groceries li").length === 1);
+    assert.equal((await db()).groceries.length, 1);
+    await page.click("#toast button");
+    await page.waitForFunction(() => document.querySelectorAll("#groceries li").length === 2);
+    await page.click("#groceries li.done [data-act=tick-grocery]"); // untick
+    await page.waitForFunction(() => !document.querySelector("#groceries li.done"));
+    assert.equal((await db()).groceries.every((g) => !g.checked), true);
   }));
 });
 

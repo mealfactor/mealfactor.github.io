@@ -9,6 +9,22 @@ import {
 const app = document.getElementById("app");
 const $ = (sel, root = document) => root.querySelector(sel);
 const mount = (id) => { app.replaceChildren($(`#${id}`).content.cloneNode(true)); };
+
+// One toast at a time, with an optional Undo. Replaces alert()/confirm().
+let toastTimer;
+function toast(msg, undo) {
+  const t = $("#toast");
+  t.replaceChildren(Object.assign(document.createElement("span"), { textContent: msg }));
+  if (undo) {
+    const b = Object.assign(document.createElement("button"), { textContent: "Undo", className: "link" });
+    b.addEventListener("click", async () => { t.hidden = true; await undo(); });
+    t.append(b);
+  }
+  t.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => (t.hidden = true), undo ? 7000 : 4000);
+}
+const say = (msg) => toast(msg);
 const showError = (el, err) => { el.textContent = err?.message ?? String(err); el.hidden = false; };
 
 if (!SUPABASE_URL || !SUPABASE_KEY) {
@@ -123,39 +139,50 @@ function showMain() {
     const name = f.name.value.trim();
     if (!name) return;
     const { error } = await sb.from("meal_options").insert({ name, kind: f.kind.value });
-    if (error && error.code !== DUPLICATE) return alert(error.message);
+    if (error && error.code !== DUPLICATE) return say(error.message);
     f.reset();
     f.kindPicked = false;
     loadMeals();
     loadDishes();
   });
-  // Typing a known regular fills in home/out for you, unless you've already
-  // picked 🏠/🍽️ yourself (so "Pizza" can be both a home and an out regular).
-  for (const f of [$("#option-form"), $("#eaten-form")]) {
-    f.kindPicked = false;
-    f.kind.addEventListener("input", () => (f.kindPicked = true));
-    f.name.addEventListener("input", () => {
-      const dish = findDish(f.name.value);
-      if (!dish || f.kindPicked) return;
-      f.kind.value = dish.kind;
-      f.kind.dispatchEvent(new Event("change"));
-      if (f.place && !f.place.value) f.place.value = dish.place ?? "";
-    });
-  }
+  // Option form: typing a known regular fills in home/out for you, unless you've
+  // already picked 🏠/🍽️ yourself (so "Pizza" can be both a home and an out regular).
+  const of = $("#option-form");
+  of.kindPicked = false;
+  of.kind.addEventListener("input", () => (of.kindPicked = true));
+  of.name.addEventListener("input", () => {
+    const dish = findDish(of.name.value);
+    if (!dish || of.kindPicked) return;
+    of.kind.value = dish.kind;
+  });
 
+  // Calendar form: pick a past meal from the list, or choose "New meal…" to type one.
   const ef = $("#eaten-form");
   ef.slot.value = slotForNow();
-  ef.kind.addEventListener("change", () => (ef.place.hidden = ef.kind.value !== "out"));
+  const syncEaten = () => {
+    const isNew = ef.dish.value === NEW;
+    ef.name.hidden = !isNew; ef.name.required = isNew;
+    ef.kind.hidden = !isNew;
+    ef.place.hidden = !isNew || ef.kind.value !== "out";
+    if (isNew) ef.name.focus();
+  };
+  ef.dish.addEventListener("change", syncEaten);
+  ef.kind.addEventListener("change", syncEaten);
   ef.addEventListener("submit", async (e) => {
     e.preventDefault();
+    const day = state.calDay;
+    if (ef.dish.value !== NEW) {
+      const dish = state.dishes.find((d) => d.id === ef.dish.value);
+      if (dish) await logEaten(dish, { slot: ef.slot.value, eaten_on: day });
+      return;
+    }
     const name = ef.name.value.trim();
     if (!name) return;
     const kind = ef.kind.value;
     const place = kind === "out" ? (ef.place.value.trim() || null) : null;
-    const { error } = await sb.from("meals_eaten").insert({ name, kind, place, slot: ef.slot.value, eaten_on: state.calDay });
-    if (error) return alert(error.code === DUPLICATE ? `Already logged for ${ef.slot.value} that day.` : error.message);
+    const { error } = await sb.from("meals_eaten").insert({ name, kind, place, slot: ef.slot.value, eaten_on: day });
+    if (error) return say(error.code === DUPLICATE ? `Already logged for ${ef.slot.value} that day.` : error.message);
     ef.name.value = ""; ef.place.value = "";
-    ef.kindPicked = false;
     loadEaten();
     loadDishes();
   });
@@ -165,7 +192,7 @@ function showMain() {
     const name = f.name.value.trim();
     if (!name) return;
     const { error } = await sb.rpc("ensure_dish", { p_name: name, p_kind: f.dataset.kind, p_place: f.place?.value.trim() || null });
-    if (error) return alert(error.message);
+    if (error) return say(error.message);
     f.reset();
     f.name.focus();
     loadDishes();
@@ -183,9 +210,15 @@ function showMain() {
   });
 
   $("#new-round").addEventListener("click", async () => {
-    if (!state.options.length || !confirm("Clear all current suggestions?")) return;
-    await sb.from("meal_options").update({ status: "archived" }).eq("status", "open");
+    const ids = state.options.map((o) => o.id);
+    if (!ids.length) return;
+    await sb.from("meal_options").update({ status: "archived" }).in("id", ids);
     loadMeals();
+    toast("Cleared the vote.", async () => {
+      const { error } = await sb.from("meal_options").update({ status: "open" }).in("id", ids);
+      if (error) say(error.message);
+      loadMeals();
+    });
   });
 
   loadHousehold();
@@ -206,6 +239,7 @@ function showMain() {
 
 // Postgres unique_violation: the meal is already in the vote / already logged.
 const DUPLICATE = "23505";
+const NEW = "__new__";
 
 // Every calendar entry and vote option points at one regular (dish_id); the
 // database creates the regular when a new name is added anywhere.
@@ -214,13 +248,14 @@ const findDish = (name, kind) => find(state.dishes, name, kind);
 
 async function logEaten(dish, { slot = slotForNow(), eaten_on = ymd(new Date()) } = {}) {
   const { error } = await sb.from("meals_eaten").insert({ dish_id: dish.id, name: dish.name, kind: dish.kind, place: dish.place, slot, eaten_on });
-  if (error) alert(error.code === DUPLICATE ? `${dish.name} is already logged for today's ${slot}.` : error.message);
+  const when = eaten_on === ymd(new Date()) ? "today's" : "that day's";
+  if (error) say(error.code === DUPLICATE ? `${dish.name} is already logged for ${when} ${slot}.` : error.message);
   loadEaten();
 }
 
 async function suggestDish(dish) {
   const { error } = await sb.from("meal_options").insert({ dish_id: dish.id, name: dish.name, kind: dish.kind });
-  if (error && error.code !== DUPLICATE) alert(error.message);
+  if (error && error.code !== DUPLICATE) say(error.message);
   loadMeals();
 }
 
@@ -240,8 +275,14 @@ async function onListClick(e) {
     }
     loadMeals();
   } else if (act === "del-option") {
-    await sb.from("meal_options").delete().eq("id", id);
+    const o = state.options.find((x) => x.id === id);
+    await sb.from("meal_options").update({ status: "archived" }).eq("id", id);
     loadMeals();
+    toast(`Removed ${o?.name ?? "suggestion"}.`, async () => {
+      const { error } = await sb.from("meal_options").update({ status: "open" }).eq("id", id);
+      if (error) say(error.message);
+      loadMeals();
+    });
   } else if (act === "choose") {
     const o = state.options.find((x) => x.id === id);
     await sb.from("meal_options").update({ status: "archived" }).eq("status", "open").neq("id", id);
@@ -249,9 +290,24 @@ async function onListClick(e) {
     const d = state.dishes.find((x) => x.id === o?.dish_id);
     if (d) await logEaten(d);
     loadMeals();
-  } else if (act === "del-grocery") {
-    await sb.from("groceries").delete().eq("id", id);
+  } else if (act === "tick-grocery") {
+    const g = state.groceries.find((x) => x.id === id);
+    if (!g) return;
+    g.checked = !g.checked; // instant feedback; the reload below confirms it
+    renderGroceries();
+    const { error } = await sb.from("groceries").update({ checked: g.checked }).eq("id", id);
+    if (error) say(error.message);
     loadGroceries();
+  } else if (act === "clear-ticked") {
+    const rows = state.groceries.filter((g) => g.checked);
+    if (!rows.length) return;
+    await sb.from("groceries").delete().in("id", rows.map((g) => g.id));
+    loadGroceries();
+    toast(`Cleared ${rows.length} ticked item${rows.length > 1 ? "s" : ""}.`, async () => {
+      const { error } = await sb.from("groceries").insert(rows.map(({ id, name, qty, checked, created_at }) => ({ id, name, qty, checked, created_at })));
+      if (error) say(error.message);
+      loadGroceries();
+    });
   } else if (act === "dish-vote" && dish) {
     await suggestDish(dish);
     btn.textContent = "✓";
@@ -262,19 +318,34 @@ async function onListClick(e) {
     if (!name) return;
     const place = dish.kind === "out" ? (prompt("Where?", dish.place ?? "")?.trim() || null) : null;
     const { error } = await sb.from("dishes").update({ name, place }).eq("id", id);
-    if (error) return alert(error.code === DUPLICATE ? `"${name}" is already a regular.` : error.message);
+    if (error) return say(error.code === DUPLICATE ? `"${name}" is already a regular.` : error.message);
     loadDishes(); loadEaten(); loadMeals();
   } else if (act === "del-dish" && dish) {
-    if (!confirm(`Remove "${dish.name}" from regulars? It stays in your calendar history, and adding it again brings it back.`)) return;
     await sb.from("dishes").update({ archived: true }).eq("id", id);
     loadDishes();
+    toast(`Removed ${dish.name} from regulars.`, async () => {
+      await sb.from("dishes").update({ archived: false }).eq("id", id);
+      loadDishes();
+    });
   } else if (act === "del-eaten") {
+    const m = state.eaten.find((x) => x.id === id);
     await sb.from("meals_eaten").delete().eq("id", id);
     loadEaten();
+    if (m) toast(`Removed ${m.name}.`, async () => {
+      const { id, dish_id, name, kind, place, slot, eaten_on } = m;
+      const { error } = await sb.from("meals_eaten").insert({ id, dish_id, name, kind, place, slot, eaten_on });
+      if (error) say(error.message);
+      loadEaten();
+    });
 
   } else if (act === "cal-prev" || act === "cal-next") {
     state.calMonth = addMonths(state.calMonth, act === "cal-next" ? 1 : -1);
     renderCalendar();
+  } else if (act === "goto") {
+    state.calDay = ymd(new Date());
+    state.calMonth = firstOfMonth(new Date());
+    renderCalendar();
+    $(`.bottom-nav [data-view=${btn.dataset.view}]`).click();
   } else if (act === "cal-day") {
     state.calDay = btn.dataset.day;
     renderCalendar();
@@ -356,7 +427,22 @@ async function loadDishes() {
   renderDishes();
   renderStale();
   renderCalendar();
+  renderEatenPicker();
   $("#dish-names").innerHTML = activeDishes().map((d) => `<option value="${esc(d.name)}">`).join("");
+}
+
+// Past meals (regulars) for the calendar form, grouped home/out, plus "New meal…".
+function renderEatenPicker() {
+  const sel = $("#eaten-form")?.dish;
+  if (!sel) return;
+  const keep = sel.value;
+  const group = (kind, label) => {
+    const rows = activeDishes().filter((d) => d.kind === kind).sort((a, b) => a.name.localeCompare(b.name));
+    return rows.length ? `<optgroup label="${label}">${rows.map((d) => `<option value="${d.id}">${esc(d.name)}${d.place ? ` · ${esc(d.place)}` : ""}</option>`).join("")}</optgroup>` : "";
+  };
+  sel.innerHTML = group("home", "🏠 At home") + group("out", "🍽️ Eat out") + `<option value="${NEW}">➕ New meal…</option>`;
+  sel.value = [...sel.options].some((o) => o.value === keep) ? keep : (activeDishes().length ? sel.options[0].value : NEW);
+  sel.dispatchEvent(new Event("change"));
 }
 
 function renderDishes() {
@@ -386,7 +472,18 @@ async function loadEaten() {
   renderStale();
 }
 
+function renderToday() {
+  if (!$("#today")) return;
+  const meals = sortBySlot(groupByDay(state.eaten)[ymd(new Date())] ?? []);
+  $("#today").innerHTML = meals.length ? meals.map((x) => {
+    const place = x.place ?? state.dishes.find((d) => d.id === x.dish_id)?.place;
+    return `<li><div class="grow">${kindIcon(x.kind)} ${esc(x.name)}${place ? ` <span class="meta">· ${esc(place)}</span>` : ""}</div>
+      <span class="meta">${x.slot ? x.slot[0].toUpperCase() + x.slot.slice(1) : ""}</span></li>`;
+  }).join("") : `<li class="muted">Nothing logged yet today.</li>`;
+}
+
 function renderCalendar() {
+  renderToday();
   if (!$("#cal-grid")) return;
   const m = state.calMonth;
   $("#cal-title").textContent = m.toLocaleDateString(undefined, { month: "long", year: "numeric" });
@@ -420,12 +517,19 @@ function renderCalendar() {
 async function loadGroceries() {
   const { data } = await sb.from("groceries").select("*").order("created_at", { ascending: false });
   state.groceries = data ?? [];
+  renderGroceries();
+}
+
+function renderGroceries() {
   if (!$("#groceries")) return;
-  $("#groceries").innerHTML = state.groceries.length ? state.groceries.map((g) => `
-    <li>
+  // Ticked items sink to the bottom; each group stays newest first.
+  const rows = [...state.groceries.filter((g) => !g.checked), ...state.groceries.filter((g) => g.checked)];
+  $("#groceries").innerHTML = rows.length ? rows.map((g) => `
+    <li class="${g.checked ? "done" : ""}">
+      <button class="tick" data-act="tick-grocery" data-id="${g.id}" aria-pressed="${!!g.checked}" aria-label="${g.checked ? "Untick" : "Tick off"} ${esc(g.name)}">${g.checked ? "✓" : ""}</button>
       <div class="grow">${esc(g.name)}${g.qty ? ` <span class="meta">· ${esc(g.qty)}</span>` : ""}
         <div class="meta">added ${new Date(g.created_at).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}</div>
       </div>
-      <button class="x" data-act="del-grocery" data-id="${g.id}" aria-label="Used up">✕</button>
     </li>`).join("") : `<li class="muted">Nothing logged yet.</li>`;
+  $("#clear-ticked").hidden = !state.groceries.some((g) => g.checked);
 }

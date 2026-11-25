@@ -162,3 +162,28 @@ select { padding: 10px 8px; min-height: 44px; }
 .cal-grid .day.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
 .cal-legend { margin: 8px 0 0; }
 #eaten-form { margin-top: 8px; }
+
+/* Today card */
+.grow-h { flex: 1; margin: 0; }
+#today-card .row { justify-content: space-between; }
+
+/* Grocery tick */
+.tick { flex: 0 0 auto; width: 44px; height: 44px; border-radius: 50%; padding: 0; background: none; border: 0; position: relative; }
+.tick::before { content: ""; position: absolute; inset: 9px; border: 2px solid var(--muted); border-radius: 50%; }
+.tick[aria-pressed=true]::before { background: var(--good); border-color: var(--good); }
+.tick[aria-pressed=true] { color: #fff; font-weight: 700; }
+.list li.done .grow { text-decoration: line-through; color: var(--muted); }
+button.link#clear-ticked { min-height: 44px; padding: 10px 8px; }
+
+/* Toast with Undo */
+.toast {
+  position: fixed; z-index: 10; left: 12px; right: 12px; margin-inline: auto; max-width: 616px;
+  bottom: calc(76px + env(safe-area-inset-bottom));
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--text); color: var(--bg); border-radius: 12px; padding: 4px 8px 4px 16px; box-shadow: 0 4px 16px #0004;
+}
+.toast button.link { color: var(--accent); font-weight: 700; text-decoration: none; min-height: 44px; padding: 10px 12px; }
+
+.grow-select { flex: 1; min-width: 0; }
+.row:has(> [hidden]:only-child) { display: none; }
+#eaten-form .row + .row { margin-top: 8px; }

@@ -21,7 +21,7 @@ that belong to their own household. The Supabase *publishable key* in `config.js
 
 1. Create a free project at [supabase.com](https://supabase.com).
 2. **SQL Editor → New query**, paste all of `supabase/schema.sql`, then click **Run**.
-   (Databases created before the calendar existed only need `supabase/migrations/002_calendar_regulars.sql`.)
+   (Existing databases: run the files in `supabase/migrations/` you haven't yet; the latest is `004_grocery_checked.sql`.)
 3. **Authentication → Sign In / Providers → Email**: turn **off** “Confirm email”. Usernames are mapped
    to pseudo-emails, so no mail can be delivered.
 4. **Project Settings → API**: copy the **Project URL** (Settings → Data API) and the **publishable** key (Settings → API Keys) into `config.js`, then commit and push.

@@ -75,6 +75,10 @@
     <datalist id="dish-names"></datalist>
 
     <div data-view="meal">
+      <section class="card" id="today-card">
+        <div class="row"><h2 class="grow-h">📍 Today</h2><button class="link" data-act="goto" data-view="calendar">Log a meal</button></div>
+        <ul id="today" class="list compact"></ul>
+      </section>
       <section class="card">
         <div id="winner"></div>
         <form id="option-form" class="row">
@@ -109,20 +113,25 @@
       <ul id="day-meals" class="list"></ul>
       <form id="eaten-form">
         <div class="row">
-          <input name="name" placeholder="What did we eat?" required autocomplete="off" list="dish-names">
-          <select name="kind" class="kind" aria-label="Home or out">
+          <select name="dish" class="grow-select" aria-label="Meal"></select>
+        </div>
+        <div class="row">
+          <input name="name" placeholder="New meal name" autocomplete="off" hidden>
+          <select name="kind" class="kind" aria-label="Home or out" hidden>
             <option value="home">🏠</option>
             <option value="out">🍽️</option>
           </select>
         </div>
         <div class="row">
-          <select name="slot" aria-label="Meal">
+          <input name="place" placeholder="Where? (optional)" autocomplete="off" hidden>
+        </div>
+        <div class="row">
+          <select name="slot" aria-label="Meal time">
             <option value="breakfast">Breakfast</option>
             <option value="lunch">Lunch</option>
             <option value="dinner">Dinner</option>
             <option value="snack">Snack</option>
           </select>
-          <input name="place" placeholder="Where? (optional)" autocomplete="off" hidden>
           <button class="primary">Log it</button>
         </div>
       </form>
@@ -158,7 +167,8 @@
         <button class="primary">Add</button>
       </form>
       <ul id="groceries" class="list"></ul>
-      <p class="muted small">Tap ✕ when something's used up.</p>
+      <div class="row end"><button id="clear-ticked" data-act="clear-ticked" class="link" hidden>Clear ticked items</button></div>
+      <p class="muted small">Tap the circle to tick something off.</p>
     </section>
 
     <section data-view="home" class="card" hidden>
@@ -168,6 +178,8 @@
       <ul id="members" class="list compact"></ul>
     </section>
   </template>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
   <script type="module" src="app.js"></script>
 </body>

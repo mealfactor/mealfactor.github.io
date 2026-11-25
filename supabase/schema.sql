@@ -63,6 +63,7 @@ create table if not exists public.groceries (
   name         text not null,
   qty          text,
   added_by     uuid default auth.uid() references auth.users(id) on delete set null,
+  checked      boolean not null default false,
   created_at   timestamptz not null default now()
 );
 

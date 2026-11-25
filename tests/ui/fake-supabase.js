@@ -50,7 +50,7 @@ function linkDish(table, row) {
 }
 
 const defaults = {
-  groceries: () => ({ created_at: now() }),
+  groceries: () => ({ checked: false, created_at: now() }),
   dishes: () => ({ kind: "home", place: null, archived: false, created_at: now() }),
   meals_eaten: () => ({ kind: "home", place: null, eaten_on: new Date().toISOString().slice(0, 10), slot: null, created_at: now() }),
   meal_options: () => ({ kind: "home", status: "open", created_at: now() }),
@@ -60,7 +60,7 @@ const defaults = {
 function query(table) {
   const filters = [];
   let op = "select", payload = null, single = false, maybe = false, returning = false, orders = [], limit = Infinity;
-  const matches = (r) => visible(table, r) && filters.every(([k, v, neg]) => (neg ? r[k] !== v : r[k] === v));
+  const matches = (r) => visible(table, r) && filters.every(([k, v, neg, isIn]) => (isIn ? v.includes(r[k]) : neg ? r[k] !== v : r[k] === v));
 
   function run() {
     if (!sessionUserId && table !== "members") return { data: single ? null : [], error: null };
@@ -122,6 +122,7 @@ function query(table) {
     update(p) { op = "update"; payload = p; return c; },
     delete() { op = "delete"; return c; },
     eq(k, v) { filters.push([k, v, false]); return c; },
+    in(k, vs) { filters.push([k, vs, false, true]); return c; },
     neq(k, v) { filters.push([k, v, true]); return c; },
     order(col, opts = {}) { orders.push([col, opts.ascending !== false]); return c; },
     limit(n) { limit = n; return c; },
