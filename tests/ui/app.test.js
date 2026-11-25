@@ -256,6 +256,20 @@ const slotless = () => {
 const dishRow = (id, name, extra = {}) => ({ id, household_id: "h1", name, kind: "home", ...extra });
 const eatenRow = (id, dish_id, name, n, extra = {}) => ({ id, household_id: "h1", dish_id, name, kind: "home", eaten_on: day(n), slot: null, ...extra });
 
+describe("lowercase", () => {
+  test("all text is displayed lowercase", async () => {
+    const { page, close } = await openApp(baseSeed(), { lowercase: true });
+    try {
+      await page.waitForSelector(".bottom-nav");
+      assert.equal(await page.$eval("h1", (e) => getComputedStyle(e).textTransform), "lowercase");
+      assert.equal(await page.$eval("h1", (e) => e.innerText), "🍲 mealfactor");
+      for (const sel of ["button", "input", "#stale .grow"]) {
+        assert.equal(await page.$eval(sel, (e) => getComputedStyle(e).textTransform), "lowercase", sel);
+      }
+    } finally { await close(); }
+  });
+});
+
 describe("it's been a while", () => {
   test("shows overdue regulars (most overdue first), then never-had; hides recent and archived", () => withApp(slotless(), async ({ page }) => {
     await page.waitForSelector("#stale li");

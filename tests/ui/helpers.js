@@ -76,7 +76,7 @@ export async function stopAll() {
 
 // Opens the app with the given seed. Returns { page, dialogs, answer, db }.
 // `answer` queues replies for prompt/confirm dialogs (default: accept).
-export async function openApp(seed = baseSeed(), { width = 375, height = 812 } = {}) {
+export async function openApp(seed = baseSeed(), { width = 375, height = 812, lowercase = false } = {}) {
   const context = await browser.newContext({ viewport: { width, height }, timezoneId: "America/Los_Angeles", locale: "en-US", hasTouch: true });
   const page = await context.newPage();
   const errors = [];
@@ -98,6 +98,8 @@ export async function openApp(seed = baseSeed(), { width = 375, height = 812 } =
     route.fulfill({ contentType: "text/javascript", body: await readFile(FAKE, "utf8") }));
   await page.addInitScript((s) => { window.__SEED = s; }, seed);
   await page.goto(baseUrl);
+  // The app shows everything lowercase (CSS only); innerText follows that, so tests read the real text unless they opt in.
+  if (!lowercase) await page.addStyleTag({ content: "*, *::before, *::after { text-transform: none !important; }" });
   return {
     page, dialogs, errors,
     answer: (...a) => answers.push(...a),
