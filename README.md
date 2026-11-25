@@ -8,7 +8,7 @@ A tiny web app for two people sharing a kitchen:
 - **⭐ Regulars**: two lists, things you make at home and things you eat out (with the place), each showing when you last had it.
 - **🧺 Groceries**: log what you have this week, and tap ✕ when something's used up.
 
-Username and password login. It's a static site on GitHub Pages, at https://whatareweeatingnext.github.io, with data stored in [Supabase](https://supabase.com) (free tier).
+Username and password login. It's a static site on GitHub Pages, at https://mealfactor.github.io, with data stored in [Supabase](https://supabase.com) (free tier).
 
 ## Privacy
 
