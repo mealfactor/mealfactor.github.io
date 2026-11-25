@@ -3,7 +3,7 @@ import { SUPABASE_URL, SUPABASE_KEY, USERNAME_EMAIL_DOMAIN } from "./config.js";
 import {
   STALE_DAYS, esc, kindIcon, ymd, parseYmd, firstOfMonth, addMonths, daysAgo, agoText, slotForHour,
   activeDishes as active, findDish as find, suggestions, STALE_LIMIT, regularsList,
-  scoreOptions, leader, voteAction, monthCells, groupByDay, sortBySlot, MACROS, macroText, sumMacros, parseGrams,
+  scoreOptions, leader, voteAction, monthCells, groupByDay, sortBySlot, MACROS, macroText, sumMacros, splitText, weekStart, addDays, weekSummary, parseGrams,
 } from "./lib.js";
 
 const app = document.getElementById("app");
@@ -265,7 +265,8 @@ const activeDishes = () => active(state.dishes);
 const findDish = (name, kind) => find(state.dishes, name, kind);
 
 async function logEaten(dish, { slot = slotForNow(), eaten_on = ymd(new Date()) } = {}) {
-  const { error } = await sb.from("meals_eaten").insert({ dish_id: dish.id, name: dish.name, kind: dish.kind, place: dish.place, slot, eaten_on });
+  const grams = Object.fromEntries(MACROS.map(([k]) => [k, dish[k] ?? null])); // frozen copy: later edits don't change this entry
+  const { error } = await sb.from("meals_eaten").insert({ dish_id: dish.id, name: dish.name, kind: dish.kind, place: dish.place, slot, eaten_on, ...grams });
   const when = eaten_on === ymd(new Date()) ? "today's" : "that day's";
   if (error) say(error.code === DUPLICATE ? `${dish.name} is already logged for ${when} ${slot}.` : error.message);
   loadEaten();
@@ -376,12 +377,16 @@ async function onListClick(e) {
     await sb.from("meals_eaten").delete().eq("id", id);
     loadEaten();
     if (m) toast(`Removed ${m.name}.`, async () => {
-      const { id, dish_id, name, kind, place, slot, eaten_on } = m;
-      const { error } = await sb.from("meals_eaten").insert({ id, dish_id, name, kind, place, slot, eaten_on });
+      const { id, dish_id, name, kind, place, slot, eaten_on, carbs_g, protein_g, fat_g } = m;
+      const { error } = await sb.from("meals_eaten").insert({ id, dish_id, name, kind, place, slot, eaten_on, carbs_g, protein_g, fat_g });
       if (error) say(error.message);
       loadEaten();
     });
 
+  } else if (act === "week-prev" || act === "week-next") {
+    state.calDay = addDays(state.calDay, act === "week-next" ? 7 : -7);
+    state.calMonth = firstOfMonth(parseYmd(state.calDay));
+    renderCalendar();
   } else if (act === "cal-prev" || act === "cal-next") {
     state.calMonth = addMonths(state.calMonth, act === "cal-next" ? 1 : -1);
     renderCalendar();
@@ -409,10 +414,12 @@ async function loadHousehold() {
   renderMeals();
 }
 
+// Vote options aren't eaten yet, so they show the regular's current macros...
 const macroLine = (dishId) => macroText(state.dishes.find((d) => d.id === dishId));
+// ...calendar entries show the macros saved when they were logged.
 const totalsLine = (entries) => {
-  const t = sumMacros(entries, state.dishes);
-  return t ? macroText(t) : "";
+  const t = sumMacros(entries);
+  return t ? `${macroText(t)}${splitText(t) ? ` (${splitText(t)})` : ""}` : "";
 };
 
 const nameOf = (uid) => state.members.find((m) => m.user_id === uid)?.username ?? "someone";
@@ -550,7 +557,7 @@ function renderToday() {
   $("#today").innerHTML = meals.length ? meals.map((x) => {
     const place = x.place ?? state.dishes.find((d) => d.id === x.dish_id)?.place;
     return `<li><div class="grow">${kindIcon(x.kind)} ${esc(x.name)}${place ? ` <span class="meta">· ${esc(place)}</span>` : ""}
-      ${macroLine(x.dish_id) ? `<div class="meta macros">${macroLine(x.dish_id)}</div>` : ""}</div>
+      ${macroText(x) ? `<div class="meta macros">${macroText(x)}</div>` : ""}</div>
       <span class="meta">${x.slot ? x.slot[0].toUpperCase() + x.slot.slice(1) : ""}</span></li>`;
   }).join("") + (totalsLine(meals) ? `<li class="total"><div class="grow meta">Total · ${totalsLine(meals)}</div></li>` : "") : `<li class="muted">Nothing logged yet today.</li>`;
 }
@@ -579,10 +586,27 @@ function renderCalendar() {
     return `
     <li>
       <div class="grow">${kindIcon(x.kind)} ${esc(x.name)}${place ? ` <span class="meta">· ${esc(place)}</span>` : ""}
-        <div class="meta">${x.slot ? x.slot[0].toUpperCase() + x.slot.slice(1) : ""}${macroLine(x.dish_id) ? ` · ${macroLine(x.dish_id)}` : ""}</div></div>
+        <div class="meta">${x.slot ? x.slot[0].toUpperCase() + x.slot.slice(1) : ""}${macroText(x) ? ` · ${macroText(x)}` : ""}</div></div>
       <button class="x" data-act="del-eaten" data-id="${x.id}" aria-label="Remove">✕</button>
     </li>`;
   }).join("") + (totalsLine(meals) ? `<li class="total"><div class="grow meta">Day total · ${totalsLine(meals)}</div></li>` : "") : `<li class="muted">Nothing logged.</li>`;
+  renderWeek();
+}
+
+function renderWeek() {
+  if (!$("#week")) return;
+  const start = weekStart(state.calDay);
+  const w = weekSummary(state.eaten, start);
+  const fmtDay = (k) => parseYmd(k).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  $("#week-title").textContent = `${fmtDay(start)} – ${fmtDay(addDays(start, 6))}`;
+  const grams = (t) => (t ? `C ${Math.round(t.carbs_g)} · P ${Math.round(t.protein_g)} · F ${Math.round(t.fat_g)}` : "");
+  $("#week").innerHTML = w.days.map((d) => `
+    <li class="${d.key === state.calDay ? "sel" : ""}">
+      <button class="link" data-act="cal-day" data-day="${d.key}">${parseYmd(d.key).toLocaleDateString(undefined, { weekday: "short", day: "numeric" })}</button>
+      <span class="grow meta">${d.totals ? grams(d.totals) : d.meals.length ? "no macros" : "–"}</span>
+      <strong>${d.kcal != null ? `${d.kcal} kcal` : ""}</strong>
+    </li>`).join("") + (w.totals ? `
+    <li class="total"><div class="grow meta">Week · ${macroText(w.totals)}<br>${splitText(w.totals)}${w.avg != null ? ` · avg ${w.avg} kcal/day (${w.logged} day${w.logged > 1 ? "s" : ""})` : ""}</div></li>` : "");
 }
 
 // ----------------------------------------------------------- groceries ----

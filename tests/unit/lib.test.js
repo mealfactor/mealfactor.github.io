@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   STALE_DAYS, esc, kindIcon, cleanName, norm, ymd, parseYmd, firstOfMonth, addMonths,
   daysAgo, agoText, slotForHour, activeDishes, findDish, lastEaten, usualGap, usualSlot, words, groceryMatches, suggestions, regularsList,
-  scoreOptions, leader, voteAction, monthCells, groupByDay, sortBySlot, calories, macroText, sumMacros, parseGrams,
+  scoreOptions, leader, voteAction, monthCells, groupByDay, sortBySlot, calories, macroText, sumMacros, splitText, weekStart, addDays, weekSummary, parseGrams,
 } from "../../lib.js";
 
 const TODAY = "2026-10-21";
@@ -349,11 +349,39 @@ describe("macros and calories", () => {
     assert.equal(macroText({ protein_g: 20 }), "P 20g · 80 kcal");
     assert.equal(macroText({}), "");
   });
-  test("sumMacros adds each eaten meal's regular; skips unknown dishes; null if none have macros", () => {
-    const dishes = [{ id: "a", carbs_g: 10, protein_g: 5, fat_g: 1 }, { id: "b", carbs_g: 30 }, { id: "c" }];
-    const t = sumMacros([{ dish_id: "a" }, { dish_id: "a" }, { dish_id: "b" }, { dish_id: "zzz" }], dishes);
+  test("sumMacros adds each entry's own saved macros; null if none have macros", () => {
+    const t = sumMacros([{ carbs_g: 10, protein_g: 5, fat_g: 1 }, { carbs_g: 10, protein_g: 5, fat_g: 1 }, { carbs_g: 30 }, {}]);
     assert.deepEqual(t, { carbs_g: 50, protein_g: 10, fat_g: 2 });
-    assert.equal(sumMacros([{ dish_id: "c" }], dishes), null);
+    assert.equal(sumMacros([{}, { name: "x" }]), null);
+    assert.equal(sumMacros([]), null);
+  });
+  test("splitText: share of calories from carbs, protein, fat", () => {
+    assert.equal(splitText({ carbs_g: 50, protein_g: 25, fat_g: 11.11 }), "C 50% · P 25% · F 25%");
+    assert.equal(splitText({ carbs_g: 0, protein_g: 0, fat_g: 0 }), "");
+  });
+  test("weekStart is the Sunday on or before; addDays crosses months", () => {
+    assert.equal(weekStart("2026-10-21"), "2026-10-18"); // Wednesday
+    assert.equal(weekStart("2026-10-18"), "2026-10-18");
+    assert.equal(weekStart("2026-11-01"), "2026-11-01");
+    assert.equal(addDays("2026-10-30", 3), "2026-11-02");
+    assert.equal(addDays("2026-10-01", -1), "2026-09-30");
+  });
+  test("weekSummary: per-day kcal, week totals, average over days with macros", () => {
+    const eaten = [
+      { id: "1", eaten_on: "2026-10-19", carbs_g: 50, protein_g: 25, fat_g: 10 }, // 390
+      { id: "2", eaten_on: "2026-10-19", carbs_g: 10 },                           // 40
+      { id: "3", eaten_on: "2026-10-21", protein_g: 50 },                         // 200
+      { id: "4", eaten_on: "2026-10-22" },                                        // no macros
+      { id: "5", eaten_on: "2026-10-25", fat_g: 100 },                            // outside this week
+    ];
+    const w = weekSummary(eaten, "2026-10-18");
+    assert.deepEqual(w.days.map((d) => d.key), ["2026-10-18", "2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23", "2026-10-24"]);
+    assert.deepEqual(w.days.map((d) => d.kcal), [null, 430, null, 200, null, null, null]);
+    assert.deepEqual(w.totals, { carbs_g: 60, protein_g: 75, fat_g: 10 });
+    assert.equal(w.kcal, 630);
+    assert.equal(w.logged, 2);
+    assert.equal(w.avg, 315);
+    assert.equal(weekSummary([], "2026-10-18").totals, null);
   });
   test("parseGrams: blank is null, numbers parse, junk and negatives throw", () => {
     assert.equal(parseGrams(""), null);

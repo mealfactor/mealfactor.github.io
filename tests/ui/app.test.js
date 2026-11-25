@@ -572,7 +572,7 @@ describe("regulars", () => {
   test("macros: save carbs/protein/fat, see them on regulars, vote, today and the day total", () => withApp({
     ...baseSeed(),
     meal_options: [{ id: "o1", household_id: "h1", dish_id: "d1", name: "Rajma chawal", kind: "home", status: "open", created_at: "1" }],
-    meals_eaten: [...baseSeed().meals_eaten, { id: "t1", household_id: "h1", dish_id: "d1", name: "Rajma chawal", kind: "home", eaten_on: TODAY, slot: "lunch", created_at: "1" }],
+    meals_eaten: [...baseSeed().meals_eaten, { id: "t1", household_id: "h1", dish_id: "d1", name: "Rajma chawal", kind: "home", eaten_on: TODAY, slot: "lunch", created_at: "1", carbs_g: 60, protein_g: 14.5, fat_g: 9 }],
   }, async ({ page, db }) => {
     await tab(page, "regulars");
     await edit(page, "d1", { carbs_g: "60", protein_g: "14.5", fat_g: "9" });
@@ -586,6 +586,48 @@ describe("regulars", () => {
     assert.match(flat(await page.innerText("#today")), /Total · C 60g · P 14.5g · F 9g · 379 kcal/);
     await tab(page, "calendar");
     assert.match(flat(await page.innerText("#day-meals")), /Day total · C 60g/);
+  }));
+
+  test("editing a regular's macros doesn't change past entries; new entries use the new macros", () => withApp({
+    ...baseSeed(),
+    dishes: baseSeed().dishes.map((d) => (d.id === "d1" ? { ...d, carbs_g: 40, protein_g: 10, fat_g: 5 } : d)),
+    meals_eaten: [...baseSeed().meals_eaten, { id: "t1", household_id: "h1", dish_id: "d1", name: "Rajma chawal", kind: "home", eaten_on: TODAY, slot: "dinner", created_at: "1", carbs_g: 40, protein_g: 10, fat_g: 5 }],
+  }, async ({ page, db }) => {
+    await tab(page, "regulars");
+    await edit(page, "d1", { carbs_g: "100", protein_g: "20", fat_g: "10" });
+    await page.click("#dish-form button[type=submit]");
+    await page.waitForFunction(() => document.querySelector("#dishes-home").innerText.includes("C 100g"));
+    await tab(page, "meal");
+    assert.match(flat(await page.innerText("#today")), /C 40g · P 10g · F 5g · 245 kcal/); // still the old numbers
+    await tab(page, "regulars");
+    await page.click("#dishes-home [data-act=dish-ate][data-id=d1]"); // eat it again, at lunch (the fixed clock is noon)
+    await tab(page, "meal");
+    await page.waitForFunction(() => document.querySelector("#today").innerText.includes("Total"));
+    const e = (await db()).meals_eaten.filter((m) => m.dish_id === "d1" && m.eaten_on === TODAY);
+    assert.deepEqual(e.map((m) => m.carbs_g).sort(), [100, 40]);
+    assert.match(flat(await page.innerText("#today")), /Total · C 140g · P 30g · F 15g · 1?\d+ kcal/);
+  }));
+
+  test("week summary: per-day kcal, week total with C/P/F split and average; week arrows", () => withApp({
+    ...baseSeed(),
+    meals_eaten: [
+      { id: "w1", household_id: "h1", dish_id: "d1", name: "Rajma chawal", kind: "home", eaten_on: "2026-10-19", slot: "lunch", created_at: "1", carbs_g: 50, protein_g: 25, fat_g: 10 },
+      { id: "w2", household_id: "h1", dish_id: "d1", name: "Rajma chawal", kind: "home", eaten_on: "2026-10-21", slot: "lunch", created_at: "1", protein_g: 50 },
+      { id: "w3", household_id: "h1", dish_id: "d1", name: "Rajma chawal", kind: "home", eaten_on: "2026-10-12", slot: "lunch", created_at: "1", fat_g: 10 },
+    ],
+  }, async ({ page }) => {
+    await tab(page, "calendar");
+    await page.waitForSelector("#week li");
+    assert.match(await page.textContent("#week-title"), /Oct 18.*Oct 24/);
+    const rows = await texts(page, "#week li");
+    assert.match(rows[1], /19 Mon.*C 50 · P 25 · F 10.*390 kcal/);
+    assert.match(rows[3], /21 Wed.*200 kcal/);
+    assert.match(rows[7], /Week · C 50g · P 75g · F 10g · 590 kcal.*C 34% · P 51% · F 15%.*avg 295 kcal\/day \(2 days\)/);
+    await page.click("[data-act=week-prev]");
+    assert.match(await page.textContent("#week-title"), /Oct 11.*Oct 17/);
+    assert.match((await texts(page, "#week li")).join("|"), /12 Mon/);
+    await page.click("[data-act=week-next]");
+    assert.match(await page.textContent("#week-title"), /Oct 18.*Oct 24/);
   }));
 
   test("macros are optional (blank clears them) and bad input is refused", () => withApp({

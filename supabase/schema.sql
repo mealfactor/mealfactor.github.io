@@ -161,6 +161,9 @@ create table if not exists public.meals_eaten (
   kind         text not null default 'home' check (kind in ('home', 'out')),
   place        text,
   dish_id      uuid references public.dishes(id) on delete set null,
+  carbs_g      numeric check (carbs_g   >= 0),
+  protein_g    numeric check (protein_g >= 0),
+  fat_g        numeric check (fat_g     >= 0),
   created_by   uuid default auth.uid() references auth.users(id) on delete set null,
   created_at   timestamptz not null default now()
 );

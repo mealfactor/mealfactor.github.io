@@ -9,9 +9,9 @@ A tiny web app for two people sharing a kitchen:
   - Meals that use groceries you've already bought (ticked) come first, matched by name or the meal's ingredients.
   - 💤 *Not now* hides a meal for a week (with Undo); filter by Home / Out; 🎲 *Surprise me* picks from the top three.
   - Meals usually eaten at another time of day sink down the list.
-- **📅 Calendar**: a month view of what you ate. Picking a vote winner logs it automatically, or add meals to any day by hand from a dropdown of your regulars (or a new one).
+- **📅 Calendar**: a month view of what you ate. Picking a vote winner logs it automatically, or add meals to any day by hand from a dropdown of your regulars (or a new one). Each day shows its C / P / F and calories, and a week summary adds a daily breakdown, the week's total with the C / P / F split, and the daily average.
 - **⭐ Regulars**: two lists, things you make at home and things you eat out (with the place), each showing when you last had it.
-  ✎ edit sets the name, place, ingredients, and macros (carbs, protein, fat in grams per serving; calories are worked out at 4/4/9 kcal per gram).
+  ✎ edit sets the name, place, ingredients, and macros (carbs, protein, fat in grams per serving; calories are worked out at 4/4/9 kcal per gram). Each calendar entry keeps the macros from the day it was logged, so editing a meal later doesn't change your history.
 - **🧺 Groceries**: add what you need, tick items off as you buy them (with Undo), and clear the ticked ones.
 
 Username and password login. It's a static site on GitHub Pages, at https://mealfactor.github.io, with data stored in [Supabase](https://supabase.com) (free tier).
@@ -27,7 +27,7 @@ that belong to their own household. The Supabase *publishable key* in `config.js
 
 1. Create a free project at [supabase.com](https://supabase.com).
 2. **SQL Editor → New query**, paste all of `supabase/schema.sql`, then click **Run**.
-   (Existing databases: run the files in `supabase/migrations/` you haven't yet; the latest is `006_suggestions.sql`.)
+   (Existing databases: run the files in `supabase/migrations/` you haven't yet; the latest is `007_eaten_macros.sql`.)
 3. **Authentication → Sign In / Providers → Email**: turn **off** “Confirm email”. Usernames are mapped
    to pseudo-emails, so no mail can be delivered.
 4. **Project Settings → API**: copy the **Project URL** (Settings → Data API) and the **publishable** key (Settings → API Keys) into `config.js`, then commit and push.

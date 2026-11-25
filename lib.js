@@ -181,16 +181,47 @@ export function macroText(d) {
   return parts.join(" · ");
 }
 
-// Total macros for the meals eaten (each looked up on its regular); null when nothing has macros.
-export function sumMacros(entries, dishes) {
+// Each calendar entry carries its own copy of the macros from when it was logged
+// (editing a regular later doesn't change it). Totals add those up; null when none are set.
+export function sumMacros(entries) {
   const total = { carbs_g: 0, protein_g: 0, fat_g: 0 };
   let any = false;
-  for (const e of entries) {
-    const d = dishes.find((x) => x.id === e.dish_id);
-    if (!d) continue;
-    for (const [k] of MACROS) if (d[k] != null) { total[k] += Number(d[k]); any = true; }
-  }
+  for (const e of entries) for (const [k] of MACROS) if (e[k] != null) { total[k] += Number(e[k]); any = true; }
   return any ? total : null;
+}
+
+// Share of calories from each macro: "C 50% · P 20% · F 30%"; "" when there are no calories.
+export function splitText(t) {
+  const kcal = calories(t);
+  if (!kcal) return "";
+  const kc = { carbs_g: 4 * (t.carbs_g ?? 0), protein_g: 4 * (t.protein_g ?? 0), fat_g: 9 * (t.fat_g ?? 0) };
+  return MACROS.map(([k, l]) => `${l} ${Math.round((kc[k] / (kc.carbs_g + kc.protein_g + kc.fat_g)) * 100)}%`).join(" · ");
+}
+
+// The Sunday on or before a day (the calendar's weeks start on Sunday).
+export function weekStart(dateStr) {
+  const d = parseYmd(dateStr);
+  return ymd(new Date(d.getFullYear(), d.getMonth(), d.getDate() - d.getDay()));
+}
+export const addDays = (dateStr, n) => {
+  const d = parseYmd(dateStr);
+  return ymd(new Date(d.getFullYear(), d.getMonth(), d.getDate() + n));
+};
+
+// Seven days from `start`: each day's entries, macro totals and calories, plus the week's
+// totals and the average over the days that have macros logged.
+export function weekSummary(eaten, start) {
+  const byDay = groupByDay(eaten);
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const key = addDays(start, i);
+    const meals = byDay[key] ?? [];
+    const totals = sumMacros(meals);
+    return { key, meals, totals, kcal: totals ? calories(totals) : null };
+  });
+  const totals = sumMacros(days.flatMap((d) => d.meals));
+  const logged = days.filter((d) => d.totals).length;
+  const kcal = totals ? calories(totals) : null;
+  return { days, totals, kcal, logged, avg: kcal != null && logged ? Math.round(kcal / logged) : null };
 }
 
 // Form text -> number or null; throws on junk or negatives.

@@ -214,3 +214,10 @@ dialog h2 { margin-top: 0; }
 
 /* everything is lowercase, including names you type (display only; stored text is unchanged) */
 body, input, button, select, textarea, dialog { text-transform: lowercase; }
+
+/* week summary */
+.week-head { margin-top: 18px; }
+.week-head h3 { margin: 0; font-size: 1rem; }
+#week li { align-items: center; gap: 8px; }
+#week li.sel { background: var(--chip); border-radius: 8px; }
+#week li button.link { min-height: 0; min-width: 4.5em; text-align: left; padding: 4px 6px; }
