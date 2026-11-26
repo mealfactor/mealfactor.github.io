@@ -110,5 +110,12 @@ export async function openApp(seed = baseSeed(), { width = 375, height = 812, lo
 
 // Small helpers for reading the UI.
 export const texts = (page, sel) => page.$$eval(sel, (els) => els.map((e) => e.innerText.replace(/\s+/g, " ").trim()));
-export const tab = (page, view) => page.click(`.bottom-nav [data-view=${view}]`);
+// "home" (household info) has no tab of its own: it opens from a link on the Meals tab.
+export const tab = async (page, view) => {
+  if (view === "home") {
+    await page.click(".bottom-nav [data-view=meals]");
+    return page.click("[data-view=meals] [data-act=goto][data-view=home]");
+  }
+  return page.click(`.bottom-nav [data-view=${view}]`);
+};
 export const settle = (page) => page.waitForTimeout(150);

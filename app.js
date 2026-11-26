@@ -3,7 +3,7 @@ import { SUPABASE_URL, SUPABASE_KEY, USERNAME_EMAIL_DOMAIN } from "./config.js";
 import {
   STALE_DAYS, esc, kindIcon, ymd, parseYmd, firstOfMonth, addMonths, daysAgo, agoText, slotForHour,
   activeDishes as active, findDish as find, suggestions, STALE_LIMIT, regularsList,
-  scoreOptions, leader, voteAction, monthCells, groupByDay, sortBySlot, MACROS, macroText, sumMacros, splitText, weekStart, addDays, weekSummary, parseGrams,
+  scoreOptions, leader, voteAction, monthCells, groupByDay, sortBySlot, MACROS, calories, macroText, sumMacros, splitText, weekStart, addDays, weekSummary, parseGrams,
 } from "./lib.js";
 
 const app = document.getElementById("app");
@@ -197,6 +197,25 @@ function showMain() {
     f.name.focus();
     loadDishes();
   }));
+
+  $("#meal-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target, err = $(".error", f);
+    err.hidden = true;
+    const name = f.name.value.trim();
+    if (!name) return;
+    let grams;
+    try { grams = Object.fromEntries(MACROS.map(([k]) => [k, parseGrams(f[k].value)])); } catch (x) { return showError(err, x); }
+    const { data: id, error } = await sb.rpc("ensure_dish", { p_name: name, p_kind: "home", p_place: null });
+    if (error) return showError(err, error);
+    if (Object.values(grams).some((v) => v != null)) {
+      const { error: e2 } = await sb.from("dishes").update(grams).eq("id", id);
+      if (e2) return showError(err, e2);
+    }
+    f.reset();
+    f.name.focus();
+    loadDishes();
+  });
 
   $("#grocery-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -523,7 +542,25 @@ function renderEatenPicker() {
   sel.dispatchEvent(new Event("change"));
 }
 
+// "Meals" tab: every home-cooked regular with its macros and calories on one row.
+function renderMealBook() {
+  const ul = $("#meal-book");
+  if (!ul) return;
+  const rows = activeDishes().filter((d) => d.kind === "home").sort((a, b) => a.name.localeCompare(b.name));
+  ul.innerHTML = rows.length ? rows.map((d) => {
+    const kcal = calories(d);
+    return `<li>
+      <div class="grow">${esc(d.name)}
+        <div class="meta macros">${kcal == null ? `<button class="link" data-act="edit-dish" data-id="${d.id}">add macros</button>` : MACROS.map(([k, l]) => `${l} ${d[k] == null ? "–" : Math.round(d[k] * 10) / 10}`).join(" · ")}</div></div>
+      <strong class="kcal">${kcal == null ? "" : `${kcal} kcal`}</strong>
+      <button data-act="edit-dish" data-id="${d.id}" aria-label="Edit" title="Edit">✎</button>
+      <button class="x" data-act="del-dish" data-id="${d.id}" aria-label="Remove">✕</button>
+    </li>`;
+  }).join("") : `<li class="muted">No meals yet. Add your first above.</li>`;
+}
+
 function renderDishes() {
+  renderMealBook();
   for (const kind of ["home", "out"]) {
     const ul = $(`#dishes-${kind}`);
     if (!ul) continue;

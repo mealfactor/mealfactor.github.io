@@ -70,7 +70,8 @@
       <button data-view="calendar"><span>📅</span>Calendar</button>
       <button data-view="regulars"><span>⭐</span>Regulars</button>
       <button data-view="groceries"><span>🧺</span>Groceries</button>
-      <button data-view="home"><span>🏠</span>Home</button>
+      <button data-view="meals"><span>🍳</span>Meals</button>
+      <button data-view="home" hidden><span>🏠</span>Home</button><!-- reached from the Meals tab -->
     </nav>
 
     <datalist id="dish-names"></datalist>
@@ -207,6 +208,22 @@
       <p class="muted small">Tap the circle to tick something off.</p>
     </section>
 
+    <section data-view="meals" class="card" hidden>
+      <h2>🍳 Meals we make</h2>
+      <p class="muted small">Add a meal with its macros per serving (grams). Calories are worked out for you.</p>
+      <form id="meal-form">
+        <label>Name <input name="name" required placeholder="e.g. Rajma chawal" autocomplete="off"></label>
+        <div class="row macro-inputs">
+          <label>Carbs <input name="carbs_g" inputmode="decimal" placeholder="g" autocomplete="off"></label>
+          <label>Protein <input name="protein_g" inputmode="decimal" placeholder="g" autocomplete="off"></label>
+          <label>Fat <input name="fat_g" inputmode="decimal" placeholder="g" autocomplete="off"></label>
+        </div>
+        <p class="error" hidden></p>
+        <button class="primary">Add meal</button>
+      </form>
+      <ul id="meal-book" class="list"></ul>
+      <div class="row end"><button class="link" data-act="goto" data-view="home">🏠 Household &amp; join code</button></div>
+    </section>
     <section data-view="home" class="card" hidden>
       <h2 id="hh-name"></h2>
       <p>Join code for your partner: <code id="hh-code"></code></p>

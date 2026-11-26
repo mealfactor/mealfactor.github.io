@@ -256,6 +256,57 @@ const slotless = () => {
 const dishRow = (id, name, extra = {}) => ({ id, household_id: "h1", name, kind: "home", ...extra });
 const eatenRow = (id, dish_id, name, n, extra = {}) => ({ id, household_id: "h1", dish_id, name, kind: "home", eaten_on: day(n), slot: null, ...extra });
 
+describe("meals tab", () => {
+  const seed = () => ({
+    ...baseSeed(),
+    dishes: baseSeed().dishes.map((d) => (d.id === "d1" ? { ...d, carbs_g: 60, protein_g: 14.5, fat_g: 9 } : d)),
+  });
+
+  test("lists home-cooked meals only, A-Z, with C/P/F and kcal per row; household info still reachable", () => withApp(seed(), async ({ page }) => {
+    await tab(page, "meals");
+    const rows = await texts(page, "#meal-book li");
+    assert.equal(rows.length, 3); // no out-meals, no archived, no other household
+    assert.match(rows[0], /^Aloo paratha add macros/);
+    assert.match(rows[2], /^Rajma chawal C 60 · P 14.5 · F 9 379 kcal/);
+    assert.equal(await page.isVisible(".bottom-nav [data-view=home]"), false);
+    await page.click("[data-view=meals] [data-act=goto][data-view=home]");
+    assert.match(await page.innerText("#hh-code"), /ABCD1234/i);
+  }));
+
+  test("add a meal with macros; an existing name is updated, not duplicated", () => withApp(seed(), async ({ page, db }) => {
+    await tab(page, "meals");
+    await page.fill("#meal-form [name=name]", "Dal tadka");
+    await page.fill("#meal-form [name=carbs_g]", "30");
+    await page.fill("#meal-form [name=protein_g]", "12");
+    await page.fill("#meal-form [name=fat_g]", "6");
+    await page.click("#meal-form .primary");
+    await page.waitForFunction(() => document.querySelector("#meal-book").innerText.includes("Dal tadka"));
+    assert.match((await texts(page, "#meal-book li")).join("|"), /Dal tadka C 30 · P 12 · F 6 222 kcal/);
+    await page.fill("#meal-form [name=name]", "dal tadka");
+    await page.fill("#meal-form [name=carbs_g]", "40");
+    await page.click("#meal-form .primary");
+    await page.waitForFunction(() => document.querySelector("#meal-book").innerText.includes("C 40"));
+    assert.equal((await db()).dishes.filter((d) => d.name.toLowerCase() === "dal tadka").length, 1);
+  }));
+
+  test("junk macros are refused; ✎ edits a row; ✕ removes with Undo", () => withApp(seed(), async ({ page }) => {
+    await tab(page, "meals");
+    await page.fill("#meal-form [name=name]", "Soup");
+    await page.fill("#meal-form [name=fat_g]", "lots");
+    await page.click("#meal-form .primary");
+    await page.waitForSelector("#meal-form .error:not([hidden])");
+    assert.ok(!(await page.innerText("#meal-book")).includes("Soup"));
+    await page.click("#meal-book li:has-text('Rajma') [data-act=edit-dish][aria-label=Edit]");
+    await page.fill("#dish-form [name=fat_g]", "20");
+    await page.click("#dish-form button[type=submit]");
+    await page.waitForFunction(() => document.querySelector("#meal-book").innerText.includes("F 20"));
+    await page.click("#meal-book li:has-text('Rajma') [data-act=del-dish]");
+    await page.waitForFunction(() => !document.querySelector("#meal-book").innerText.includes("Rajma"));
+    await page.click("#toast button");
+    await page.waitForFunction(() => document.querySelector("#meal-book").innerText.includes("Rajma"));
+  }));
+});
+
 describe("lowercase", () => {
   test("all text is displayed lowercase", async () => {
     const { page, close } = await openApp(baseSeed(), { lowercase: true });
