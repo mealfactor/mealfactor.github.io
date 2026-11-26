@@ -261,49 +261,85 @@ describe("meals tab", () => {
     ...baseSeed(),
     dishes: baseSeed().dishes.map((d) => (d.id === "d1" ? { ...d, carbs_g: 60, protein_g: 14.5, fat_g: 9 } : d)),
   });
+  const row = (id) => `#meal-book tr[data-id=${id}]`;
+  const cell = (id, k) => `${row(id)} [data-k=${k}]`;
 
-  test("lists home-cooked meals only, A-Z, with C/P/F and kcal per row; household info still reachable", () => withApp(seed(), async ({ page }) => {
+  test("a table of home-cooked meals only, A-Z, with editable C/P/F, live kcal and a Save per row", () => withApp(seed(), async ({ page }) => {
     await tab(page, "meals");
-    const rows = await texts(page, "#meal-book li");
-    assert.equal(rows.length, 3); // no out-meals, no archived, no other household
-    assert.match(rows[0], /^Aloo paratha add macros/);
-    assert.match(rows[2], /^Rajma chawal C 60 · P 14.5 · F 9 379 kcal/);
+    await page.waitForSelector("#meal-book table");
+    assert.deepEqual(await texts(page, "#meal-book thead th"), ["Meal", "C", "P", "F", "kcal", ""]);
+    assert.deepEqual(await texts(page, "#meal-book tbody tr td:first-child"), ["Aloo paratha", "Paneer butter masala", "Rajma chawal"]);
+    assert.deepEqual(await page.$$eval(`${row("d1")} input`, (els) => els.map((e) => e.value)), ["60", "14.5", "9"]);
+    assert.equal(await page.textContent(`${row("d1")} .kcal`), "379");
+    assert.equal(await page.isDisabled(`${row("d1")} [data-act=save-meal]`), true); // nothing changed yet
     assert.equal(await page.isVisible(".bottom-nav [data-view=home]"), false);
     await page.click("[data-view=meals] [data-act=goto][data-view=home]");
     assert.match(await page.innerText("#hh-code"), /ABCD1234/i);
   }));
 
-  test("add a meal with macros; an existing name is updated, not duplicated", () => withApp(seed(), async ({ page, db }) => {
+  test("typing updates kcal live; Save stores that row only; Enter saves too", () => withApp(seed(), async ({ page, db }) => {
     await tab(page, "meals");
+    await page.fill(cell("d3", "carbs_g"), "30");
+    await page.fill(cell("d3", "protein_g"), "12");
+    await page.fill(cell("d3", "fat_g"), "6");
+    assert.equal(await page.textContent(`${row("d3")} .kcal`), "222");
+    assert.equal(await page.isDisabled(`${row("d3")} [data-act=save-meal]`), false);
+    assert.equal(await page.isDisabled(`${row("d2")} [data-act=save-meal]`), true);
+    await page.click(`${row("d3")} [data-act=save-meal]`);
+    await page.waitForFunction(() => document.querySelector("#toast").innerText.includes("Saved Aloo paratha"));
+    let dishes = (await db()).dishes;
+    assert.deepEqual([30, 12, 6], ["carbs_g", "protein_g", "fat_g"].map((k) => dishes.find((d) => d.id === "d3")[k]));
+    assert.equal(dishes.find((d) => d.id === "d2").carbs_g, undefined);
+    await page.fill(cell("d1", "fat_g"), "");
+    await page.press(cell("d1", "fat_g"), "Enter");
+    await page.waitForFunction(() => document.querySelector("#toast").innerText.includes("Saved Rajma"));
+    dishes = (await db()).dishes;
+    assert.equal(dishes.find((d) => d.id === "d1").fat_g, null);
+    assert.equal(await page.textContent(`${row("d1")} .kcal`), "298");
+    assert.equal(await page.isDisabled(`${row("d3")} [data-act=save-meal]`), true); // saved, so clean again
+  }));
+
+  test("unsaved edits survive a refresh from the other phone; junk is refused", () => withApp(seed(), async ({ page, db }) => {
+    await tab(page, "meals");
+    await page.fill(cell("d3", "carbs_g"), "99");
+    await tab(page, "regulars");
+    await page.click("[data-view=regulars] [data-act=dish-ate]"); // reloads dishes in the background
+    await settle(page);
+    await tab(page, "meals");
+    assert.equal(await page.inputValue(cell("d3", "carbs_g")), "99");
+    await page.fill(cell("d3", "carbs_g"), "abc");
+    assert.equal(await page.textContent(`${row("d3")} .kcal`), "?");
+    await page.click(`${row("d3")} [data-act=save-meal]`);
+    await page.waitForFunction(() => /numbers/.test(document.querySelector("#toast").innerText));
+    assert.equal((await db()).dishes.find((d) => d.id === "d3").carbs_g, undefined);
+  }));
+
+  test("add a meal with macros; an existing name is updated, not duplicated; junk is refused", () => withApp(seed(), async ({ page, db }) => {
+    await tab(page, "meals");
+    await page.fill("#meal-form [name=name]", "Soup");
+    await page.fill("#meal-form [name=fat_g]", "lots");
+    await page.click("#meal-form .primary");
+    await page.waitForSelector("#meal-form .error:not([hidden])");
     await page.fill("#meal-form [name=name]", "Dal tadka");
     await page.fill("#meal-form [name=carbs_g]", "30");
     await page.fill("#meal-form [name=protein_g]", "12");
     await page.fill("#meal-form [name=fat_g]", "6");
     await page.click("#meal-form .primary");
     await page.waitForFunction(() => document.querySelector("#meal-book").innerText.includes("Dal tadka"));
-    assert.match((await texts(page, "#meal-book li")).join("|"), /Dal tadka C 30 · P 12 · F 6 222 kcal/);
+    const id = (await db()).dishes.find((d) => d.name === "Dal tadka").id;
+    assert.equal(await page.textContent(`${row(id)} .kcal`), "222");
     await page.fill("#meal-form [name=name]", "dal tadka");
     await page.fill("#meal-form [name=carbs_g]", "40");
     await page.click("#meal-form .primary");
-    await page.waitForFunction(() => document.querySelector("#meal-book").innerText.includes("C 40"));
+    await page.waitForFunction((s) => document.querySelector(s).value === "40", cell(id, "carbs_g"));
     assert.equal((await db()).dishes.filter((d) => d.name.toLowerCase() === "dal tadka").length, 1);
   }));
 
-  test("junk macros are refused; ✎ edits a row; ✕ removes with Undo", () => withApp(seed(), async ({ page }) => {
+  test("tapping the meal name opens the edit dialog", () => withApp(seed(), async ({ page }) => {
     await tab(page, "meals");
-    await page.fill("#meal-form [name=name]", "Soup");
-    await page.fill("#meal-form [name=fat_g]", "lots");
-    await page.click("#meal-form .primary");
-    await page.waitForSelector("#meal-form .error:not([hidden])");
-    assert.ok(!(await page.innerText("#meal-book")).includes("Soup"));
-    await page.click("#meal-book li:has-text('Rajma') [data-act=edit-dish][aria-label=Edit]");
-    await page.fill("#dish-form [name=fat_g]", "20");
-    await page.click("#dish-form button[type=submit]");
-    await page.waitForFunction(() => document.querySelector("#meal-book").innerText.includes("F 20"));
-    await page.click("#meal-book li:has-text('Rajma') [data-act=del-dish]");
-    await page.waitForFunction(() => !document.querySelector("#meal-book").innerText.includes("Rajma"));
-    await page.click("#toast button");
-    await page.waitForFunction(() => document.querySelector("#meal-book").innerText.includes("Rajma"));
+    await page.click(`${row("d1")} [data-act=edit-dish]`);
+    await page.waitForFunction(() => document.querySelector("#dish-dialog").open);
+    assert.equal(await page.inputValue("#dish-form [name=name]"), "Rajma chawal");
   }));
 });
 

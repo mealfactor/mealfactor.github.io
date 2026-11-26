@@ -210,7 +210,7 @@
 
     <section data-view="meals" class="card" hidden>
       <h2>🍳 Meals we make</h2>
-      <p class="muted small">Add a meal with its macros per serving (grams). Calories are worked out for you.</p>
+      <p class="muted small">Macros per serving, in grams. Change the numbers in any row and press its Save. Calories update as you type.</p>
       <form id="meal-form">
         <label>Name <input name="name" required placeholder="e.g. Rajma chawal" autocomplete="off"></label>
         <div class="row macro-inputs">
@@ -221,7 +221,7 @@
         <p class="error" hidden></p>
         <button class="primary">Add meal</button>
       </form>
-      <ul id="meal-book" class="list"></ul>
+      <div id="meal-book" class="table-wrap"></div>
       <div class="row end"><button class="link" data-act="goto" data-view="home">🏠 Household &amp; join code</button></div>
     </section>
     <section data-view="home" class="card" hidden>

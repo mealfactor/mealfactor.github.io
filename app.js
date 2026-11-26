@@ -217,6 +217,11 @@ function showMain() {
     loadDishes();
   });
 
+  $("#meal-book").addEventListener("input", onMealBookInput);
+  $("#meal-book").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.matches("input")) { e.preventDefault(); $("[data-act=save-meal]", e.target.closest("tr")).click(); }
+  });
+
   $("#grocery-form").addEventListener("submit", async (e) => {
     e.preventDefault();
     const name = e.target.name.value.trim();
@@ -347,6 +352,8 @@ async function onListClick(e) {
       if (error) say(error.message);
       loadGroceries();
     });
+  } else if (act === "save-meal") {
+    await saveMeal(btn.closest("tr"));
   } else if (act === "stale-filter") {
     state.staleKind = btn.dataset.kind;
     state.staleAll = false;
@@ -542,21 +549,49 @@ function renderEatenPicker() {
   sel.dispatchEvent(new Event("change"));
 }
 
-// "Meals" tab: every home-cooked regular with its macros and calories on one row.
+// "Meals" tab: every home-cooked regular as a table row, macros editable in place, Save per row.
+const gramsOf = (tr) => Object.fromEntries(MACROS.map(([k]) => [k, parseGrams($(`[data-k=${k}]`, tr).value)]));
+const sameGrams = (d, g) => MACROS.every(([k]) => (d[k] ?? null) === g[k]);
+
 function renderMealBook() {
-  const ul = $("#meal-book");
-  if (!ul) return;
+  const box = $("#meal-book");
+  if (!box) return;
+  // Don't wipe numbers that are being typed or haven't been saved yet.
+  if (box.contains(document.activeElement) || box.querySelector("tr.dirty")) return;
   const rows = activeDishes().filter((d) => d.kind === "home").sort((a, b) => a.name.localeCompare(b.name));
-  ul.innerHTML = rows.length ? rows.map((d) => {
-    const kcal = calories(d);
-    return `<li>
-      <div class="grow">${esc(d.name)}
-        <div class="meta macros">${kcal == null ? `<button class="link" data-act="edit-dish" data-id="${d.id}">add macros</button>` : MACROS.map(([k, l]) => `${l} ${d[k] == null ? "–" : Math.round(d[k] * 10) / 10}`).join(" · ")}</div></div>
-      <strong class="kcal">${kcal == null ? "" : `${kcal} kcal`}</strong>
-      <button data-act="edit-dish" data-id="${d.id}" aria-label="Edit" title="Edit">✎</button>
-      <button class="x" data-act="del-dish" data-id="${d.id}" aria-label="Remove">✕</button>
-    </li>`;
-  }).join("") : `<li class="muted">No meals yet. Add your first above.</li>`;
+  box.innerHTML = rows.length ? `<table>
+    <thead><tr><th>Meal</th>${MACROS.map(([, l]) => `<th>${l}</th>`).join("")}<th>kcal</th><th></th></tr></thead>
+    <tbody>${rows.map((d) => `<tr data-id="${d.id}">
+      <td><button class="link" data-act="edit-dish" data-id="${d.id}" title="Rename or edit ingredients">${esc(d.name)}</button></td>
+      ${MACROS.map(([k, l]) => `<td><input data-k="${k}" inputmode="decimal" aria-label="${esc(d.name)} ${l} grams" value="${d[k] ?? ""}" autocomplete="off"></td>`).join("")}
+      <td class="kcal">${calories(d) ?? ""}</td>
+      <td><button data-act="save-meal" data-id="${d.id}" disabled>Save</button></td>
+    </tr>`).join("")}</tbody></table>` : `<p class="muted">No meals yet. Add your first above.</p>`;
+}
+
+function onMealBookInput(e) {
+  const tr = e.target.closest("tr[data-id]");
+  if (!tr) return;
+  const d = state.dishes.find((x) => x.id === tr.dataset.id);
+  let g = null;
+  try { g = gramsOf(tr); } catch { /* shown when saving */ }
+  $(".kcal", tr).textContent = g ? (calories(g) ?? "") : "?";
+  const dirty = !g || !sameGrams(d, g);
+  tr.classList.toggle("dirty", dirty);
+  $("[data-act=save-meal]", tr).disabled = !dirty;
+}
+
+async function saveMeal(tr) {
+  const d = state.dishes.find((x) => x.id === tr.dataset.id);
+  let g;
+  try { g = gramsOf(tr); } catch (x) { return say(x.message); }
+  const { error } = await sb.from("dishes").update(g).eq("id", d.id);
+  if (error) return say(error.message);
+  Object.assign(d, g); // the row is the new truth; the reload below confirms it
+  tr.classList.remove("dirty");
+  $("[data-act=save-meal]", tr).disabled = true;
+  toast(`Saved ${d.name}.`);
+  await loadDishes();
 }
 
 function renderDishes() {
